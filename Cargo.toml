@@ -2,6 +2,7 @@
 members = [
     "base",
     "shared",
-    "commands/*"
+    "commands/ping",
+    "commands/tictactoe",
 ]
 resolver = "2"
