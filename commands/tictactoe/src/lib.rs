@@ -53,13 +53,16 @@ impl qg_shared::Command for TicTacToe {
     }
 
     async fn application_command(&mut self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
-        let mut players = vec![Player(interaction.user.id, Space::X)];
+        let mut players = vec![Player {
+            id: interaction.user.id,
+            piece: Space::X,
+        }];
         let other;
         players.push({
             match interaction.data.options.first().ok_or(qg_shared::anyhow::anyhow!("No opponent specified"))?.resolved.as_ref() {
                 Some(CommandDataOptionValue::User(user, _m)) => {
                     other = user.clone();
-                    Player(user.id, Space::O)
+                    Player { id: other.id, piece: Space::O }
                 }
                 _ => return Err(qg_shared::anyhow::anyhow!("No opponent specified")),
             }
@@ -67,7 +70,7 @@ impl qg_shared::Command for TicTacToe {
         #[cfg(not(feature = "allow-self-play"))]
         {
             let individuals = {
-                let mut individuals = players.iter().map(|player| player.0).collect::<Vec<UserId>>();
+                let mut individuals = players.iter().map(|player| player.id).collect::<Vec<UserId>>();
                 individuals.sort();
                 individuals.dedup();
                 individuals
@@ -184,6 +187,16 @@ impl Game {
                                 f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
                             })
                             .await?;
+                        let pid = self.players.current().ok_or(anyhow!("Player not found"))?.id.0;
+                        if pid != interaction.user.id.0 {
+                            ctx.http
+                                .get_user(pid)
+                                .await?
+                                .create_dm_channel(&ctx.http)
+                                .await?
+                                .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
+                                .await?;
+                        }
                     }
                     Action::Decline => {
                         self.gamestate = State::Cancelled("Declined".into());
@@ -201,7 +214,7 @@ impl Game {
                 }
             }
             State::InProgress(ref mut game) => {
-                if self.players.current().map(|s| s.0) != Some(interaction.user.id) {
+                if self.players.current().map(|s| s.id) != Some(interaction.user.id) {
                     interaction
                         .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("It is not your turn").ephemeral(true)))
                         .await?;
@@ -209,16 +222,38 @@ impl Game {
                 }
                 match action {
                     Action::Place(x, y) => {
-                        if let Err(e) = game.make_move(x, y, self.players.current().ok_or(anyhow!("Player not found"))?.1) {
+                        if let Err(e) = game.make_move(x, y, self.players.current().ok_or(anyhow!("Player not found"))?.piece) {
                             interaction
                                 .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid move: {}", e)).ephemeral(true)))
                                 .await?;
                             return Ok(());
                         }
                         if let Some(winner) = game.board.check_winner(&self.players) {
+                            if let Outcome::Win(p) = winner {
+                                for player in self.players.all() {
+                                    ctx.http
+                                        .get_user(player.id.0)
+                                        .await?
+                                        .create_dm_channel(&ctx.http)
+                                        .await?
+                                        .send_message(&ctx.http, |m| {
+                                            m.content(format!("You {} in {}", if *player == p { "won" } else { "got your ass handed to you" }, interaction.message.link()))
+                                        })
+                                        .await?;
+                                }
+                            }
+
                             self.gamestate = State::Finished(WonGame { winner, board: game.board.clone() });
                         } else {
                             self.players.next_player();
+
+                            ctx.http
+                                .get_user(self.players.current().ok_or(anyhow!("Player not found"))?.id.0)
+                                .await?
+                                .create_dm_channel(&ctx.http)
+                                .await?
+                                .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
+                                .await?;
                         }
 
                         interaction
@@ -268,7 +303,7 @@ impl Game {
             State::InProgress(game) => {
                 let mut content = self.title_card()?;
                 let current_player = self.players.current().ok_or(anyhow!("Player not found"))?;
-                content.push_str(&format!("It is {}'s turn [{}]", current_player.0.mention(), current_player.1));
+                content.push_str(&format!("It is {}'s turn [{}]", current_player.id.mention(), current_player.piece));
 
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
@@ -292,10 +327,6 @@ impl Game {
             State::Finished(won_game) => {
                 let mut content = self.title_card()?;
                 content.push_str(won_game.win_message().as_str());
-                // content.push('\n');
-                // for player in self.players.all() {
-                //     content.push_str(&format!("\n{} [{}]", player.0.mention(), player.1));
-                // }
 
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
@@ -422,7 +453,7 @@ pub struct WonGame {
 impl WonGame {
     fn win_message(&self) -> String {
         match self.winner {
-            Outcome::Win(Player(id, p)) => format!("{} [{}] has won!", id.mention(), p),
+            Outcome::Win(player) => format!("{} [{}] has won!", player.id.mention(), player.piece),
             Outcome::Tie => String::from("It's a tie!"),
         }
     }
@@ -447,33 +478,33 @@ impl Board {
         // check rows
         for row in self.spaces.iter() {
             if row.iter().all(|s| *s == Space::X) {
-                return Some(Outcome::Win(players.all().find(|p| p.1 == Space::X).copied()?));
+                return Some(Outcome::Win(players.all().find(|p| p.piece == Space::X).copied()?));
             }
             if row.iter().all(|s| *s == Space::O) {
-                return Some(Outcome::Win(players.all().find(|p| p.1 == Space::O).copied()?));
+                return Some(Outcome::Win(players.all().find(|p| p.piece == Space::O).copied()?));
             }
         }
         // check columns
         for x in 0..3 {
             if self.spaces.iter().all(|row| row[x] == Space::X) {
-                return Some(Outcome::Win(players.all().find(|p| p.1 == Space::X).copied()?));
+                return Some(Outcome::Win(players.all().find(|p| p.piece == Space::X).copied()?));
             }
             if self.spaces.iter().all(|row| row[x] == Space::O) {
-                return Some(Outcome::Win(players.all().find(|p| p.1 == Space::O).copied()?));
+                return Some(Outcome::Win(players.all().find(|p| p.piece == Space::O).copied()?));
             }
         }
         // check diagonals
         if self.spaces[0][0] == Space::X && self.spaces[1][1] == Space::X && self.spaces[2][2] == Space::X {
-            return Some(Outcome::Win(players.all().find(|p| p.1 == Space::X).copied()?));
+            return Some(Outcome::Win(players.all().find(|p| p.piece == Space::X).copied()?));
         }
         if self.spaces[0][0] == Space::O && self.spaces[1][1] == Space::O && self.spaces[2][2] == Space::O {
-            return Some(Outcome::Win(players.all().find(|p| p.1 == Space::O).copied()?));
+            return Some(Outcome::Win(players.all().find(|p| p.piece == Space::O).copied()?));
         }
         if self.spaces[0][2] == Space::X && self.spaces[1][1] == Space::X && self.spaces[2][0] == Space::X {
-            return Some(Outcome::Win(players.all().find(|p| p.1 == Space::X).copied()?));
+            return Some(Outcome::Win(players.all().find(|p| p.piece == Space::X).copied()?));
         }
         if self.spaces[0][2] == Space::O && self.spaces[1][1] == Space::O && self.spaces[2][0] == Space::O {
-            return Some(Outcome::Win(players.all().find(|p| p.1 == Space::O).copied()?));
+            return Some(Outcome::Win(players.all().find(|p| p.piece == Space::O).copied()?));
         }
         // check tie
         if self.spaces.iter().flatten().all(|s| *s != Space::Empty) {
@@ -490,7 +521,10 @@ pub enum Outcome {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-pub struct Player(UserId, Space);
+pub struct Player {
+    id: UserId,
+    piece: Space,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CycleVec<T> {
