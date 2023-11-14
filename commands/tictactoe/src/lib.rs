@@ -80,7 +80,10 @@ impl qg_shared::Command for TicTacToe {
 
         let game = Game {
             players: CycleVec::new(players),
-            gamestate: State::AwaitingApproval(other.id),
+            gamestate: State::AwaitingApproval(Awaiting {
+                inviter: interaction.user.id,
+                invitee: other.id,
+            }),
         };
 
         game.send(ctx, interaction).await?;
@@ -162,8 +165,8 @@ pub struct Game {
 impl Game {
     pub async fn do_action(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction, action: Action) -> Result<()> {
         match self.gamestate {
-            State::AwaitingApproval(u) => {
-                if interaction.user.id != u {
+            State::AwaitingApproval(ref u) => {
+                if interaction.user.id != u.invitee {
                     interaction
                         .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("You are not the invitee").ephemeral(true)))
                         .await?;
@@ -248,9 +251,9 @@ impl Game {
                     .edit_original_interaction_response(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f))
                     .await?;
             }
-            State::AwaitingApproval(u) => {
+            State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
-                content.push_str(&format!("{} has invited you to a game of Tic Tac Toe. Do you accept?", u.mention()));
+                content.push_str(u.challenge_message().as_str());
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
@@ -319,9 +322,9 @@ impl Game {
     }
     async fn send(&self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
         match self.gamestate {
-            State::AwaitingApproval(u) => {
+            State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
-                content.push_str(&format!("{} has invited you to a game of Tic Tac Toe. Do you accept?", u.mention()));
+                content.push_str(u.challenge_message().as_str());
                 interaction
                     .create_interaction_response(&ctx.http, |f| {
                         f.interaction_response_data(|d| {
@@ -374,10 +377,22 @@ impl std::fmt::Display for Space {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum State {
-    AwaitingApproval(UserId),
+    AwaitingApproval(Awaiting),
     InProgress(InProgress),
     Finished(WonGame),
     Cancelled(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Awaiting {
+    inviter: UserId,
+    invitee: UserId,
+}
+
+impl Awaiting {
+    fn challenge_message(&self) -> String {
+        format!("{} has challenged {} to a game of Tic Tac Toe", self.inviter.mention(), self.invitee.mention())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
