@@ -48,8 +48,10 @@ impl EventHandler for Handler {
             }
             Interaction::ApplicationCommand(cmd) => {
                 let name = cmd.data.name.clone();
-                let commands = self.commands.lock().await;
-                if let Some(command) = commands.find(|c| c == name) {
+                if let Some(command) = {
+                    let commands = self.commands.lock().await;
+                    commands.find(|c| c == name)
+                } {
                     if let Err(e) = command.lock().await.application_command(ctx, cmd).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
                     }
@@ -65,8 +67,10 @@ impl EventHandler for Handler {
             }
             Interaction::MessageComponent(cmp) => {
                 let name = cmp.data.custom_id.clone();
-                let commands = self.commands.lock().await;
-                if let Some(command) = commands.find(|c| name.starts_with(c)) {
+                if let Some(command) = {
+                    let commands = self.commands.lock().await;
+                    commands.find(|c| name.starts_with(c))
+                } {
                     if let Err(e) = command.lock().await.message_component(ctx, cmp).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
                     }
@@ -83,8 +87,10 @@ impl EventHandler for Handler {
             Interaction::Autocomplete(act) => {
                 log::info!("Autocomplete interaction {}", format!("{:?}", act).blue());
                 let name = act.data.name.clone();
-                let commands = self.commands.lock().await;
-                if let Some(command) = commands.find(|c| c == name) {
+                if let Some(command) = {
+                    let commands = self.commands.lock().await;
+                    commands.find(|c| c == name)
+                } {
                     if let Err(e) = command.lock().await.autocomplete(ctx, act).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
                     }
@@ -101,8 +107,10 @@ impl EventHandler for Handler {
             Interaction::ModalSubmit(mdl) => {
                 log::info!("Modal submit interaction {}", format!("{:?}", mdl).blue());
                 let name = mdl.data.custom_id.clone();
-                let commands = self.commands.lock().await;
-                if let Some(command) = commands.find(|c| name.starts_with(c)) {
+                if let Some(command) = {
+                    let commands = self.commands.lock().await;
+                    commands.find(|c| name.starts_with(c))
+                } {
                     if let Err(e) = command.lock().await.modal_submit(ctx, mdl).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
                     }
