@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "base",
+    "shared",
+    "commands/*"
+]
+resolver = "2"
