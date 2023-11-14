@@ -1,12 +1,15 @@
 #![allow(dead_code)]
 
-use qg_shared::anyhow::{anyhow, Result};
-use qg_shared::colored::*;
-use serenity::client::Context;
-use serenity::model::application::interaction::Interaction;
+use qg_shared::{
+    anyhow::{anyhow, Result},
+    colored::*,
+    log,
+};
 use serenity::{
+    client::Context,
     client::EventHandler,
     futures::lock::Mutex,
+    model::application::interaction::Interaction,
     model::id::{CommandId, GuildId},
 };
 use std::{collections::HashMap, sync::Arc};
@@ -46,7 +49,7 @@ impl EventHandler for Handler {
             Interaction::ApplicationCommand(cmd) => {
                 let name = cmd.data.name.clone();
                 let commands = self.commands.lock().await;
-                if let Some(command) = commands.commands.get(&name) {
+                if let Some(command) = commands.find(|c| c == name) {
                     if let Err(e) = command.lock().await.application_command(ctx, cmd).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
                     }
@@ -60,9 +63,59 @@ impl EventHandler for Handler {
                     }
                 }
             }
-            Interaction::MessageComponent(_) => todo!(),
-            Interaction::Autocomplete(_) => todo!(),
-            Interaction::ModalSubmit(_) => todo!(),
+            Interaction::MessageComponent(cmp) => {
+                let name = cmp.data.custom_id.clone();
+                let commands = self.commands.lock().await;
+                if let Some(command) = commands.find(|c| name.starts_with(c)) {
+                    if let Err(e) = command.lock().await.message_component(ctx, cmp).await {
+                        log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                    }
+                } else {
+                    log::warn!("Command {} not found", name.red());
+                    if let Err(e) = cmp
+                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true)))
+                        .await
+                    {
+                        log::error!("Error creating interaction response: {}", e);
+                    }
+                }
+            }
+            Interaction::Autocomplete(act) => {
+                log::info!("Autocomplete interaction {}", format!("{:?}", act).blue());
+                let name = act.data.name.clone();
+                let commands = self.commands.lock().await;
+                if let Some(command) = commands.find(|c| c == name) {
+                    if let Err(e) = command.lock().await.autocomplete(ctx, act).await {
+                        log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                    }
+                } else {
+                    log::warn!("Command {} not found", name.red());
+                    if let Err(e) = act
+                        .create_autocomplete_response(&ctx.http, |f| f.add_string_choice(format!("Command {} not found", name), "epicfail"))
+                        .await
+                    {
+                        log::error!("Error creating interaction response: {}", e);
+                    }
+                }
+            }
+            Interaction::ModalSubmit(mdl) => {
+                log::info!("Modal submit interaction {}", format!("{:?}", mdl).blue());
+                let name = mdl.data.custom_id.clone();
+                let commands = self.commands.lock().await;
+                if let Some(command) = commands.find(|c| name.starts_with(c)) {
+                    if let Err(e) = command.lock().await.modal_submit(ctx, mdl).await {
+                        log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                    }
+                } else {
+                    log::warn!("Command {} not found", name.red());
+                    if let Err(e) = mdl
+                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true)))
+                        .await
+                    {
+                        log::error!("Error creating interaction response: {}", e);
+                    }
+                }
+            }
         }
     }
 }
@@ -80,6 +133,10 @@ impl CommandHolder {
             cached_commands: None,
             dev_server,
         }
+    }
+
+    pub fn find(&self, predicate: impl Fn(&str) -> bool) -> Option<Arc<Mutex<dyn qg_shared::Command>>> {
+        self.commands.iter().find(|(name, _)| predicate(name)).map(|(_, command)| command.clone())
     }
 
     pub async fn register(&mut self, http: &Arc<serenity::http::Http>, raw_command: Arc<Mutex<dyn qg_shared::Command>>) -> Result<()> {

@@ -1,9 +1,16 @@
 #![allow(dead_code)]
-use serenity::{builder::CreateApplicationCommand, client::Context, model::application::interaction::application_command::ApplicationCommandInteraction};
+use serenity::{
+    builder::CreateApplicationCommand,
+    client::Context,
+    model::application::interaction::{
+        application_command::ApplicationCommandInteraction, autocomplete::AutocompleteInteraction, message_component::MessageComponentInteraction, modal::ModalSubmitInteraction,
+    },
+};
 
 pub use anyhow;
 pub use async_trait::async_trait;
 pub use colored;
+pub use log;
 pub use serenity;
 
 use colored::*;
@@ -25,6 +32,42 @@ where
         if let Err(e) = interaction
             .create_interaction_response(&ctx.http, |f| {
                 f.interaction_response_data(|d| d.content(format!("Interaction handler not implemented for `{}`", self.get_name())).ephemeral(true))
+            })
+            .await
+        {
+            log::error!("Error creating interaction response: {}", e);
+        }
+        Ok(())
+    }
+    async fn message_component(&mut self, ctx: Context, interaction: MessageComponentInteraction) -> Result<()> {
+        log::error!("Message component handler not implemented for {}", self.get_name().blue());
+        if let Err(e) = interaction
+            .create_interaction_response(&ctx.http, |f| {
+                f.interaction_response_data(|d| d.content(format!("Message component handler not implemented for `{}`", self.get_name())).ephemeral(true))
+            })
+            .await
+        {
+            log::error!("Error creating interaction response: {}", e);
+        }
+        Ok(())
+    }
+    async fn autocomplete(&mut self, ctx: Context, interaction: AutocompleteInteraction) -> Result<()> {
+        log::error!("Autocomplete handler not implemented for {}", self.get_name().blue());
+        if let Err(e) = interaction
+            .create_autocomplete_response(&ctx.http, |f| {
+                f.add_string_choice(format!("Autocomplete handler not implemented for `{}`", self.get_name()), "epicfail")
+            })
+            .await
+        {
+            log::error!("Error creating interaction response: {}", e);
+        }
+        Ok(())
+    }
+    async fn modal_submit(&mut self, ctx: Context, interaction: ModalSubmitInteraction) -> Result<()> {
+        log::error!("Modal submit handler not implemented for {}", self.get_name().blue());
+        if let Err(e) = interaction
+            .create_interaction_response(&ctx.http, |f| {
+                f.interaction_response_data(|d| d.content(format!("Modal submit handler not implemented for `{}`", self.get_name())).ephemeral(true))
             })
             .await
         {

@@ -8,7 +8,7 @@ async fn serenity(#[shuttle_secrets::Secrets] secret_store: shuttle_secrets::Sec
     let token = match secret_store.get("DISCORD_TOKEN") {
         Some(token) => token,
         None => {
-            log::error!("DISCORD_TOKEN not found in secret store");
+            qg_shared::log::error!("DISCORD_TOKEN not found in secret store");
             return Err(anyhow!("DISCORD_TOKEN not found in secret store").into());
         }
     };
