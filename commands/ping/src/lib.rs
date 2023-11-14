@@ -21,11 +21,11 @@ impl qg_shared::Command for PingCommand {
         qg_shared::CommandInfo {
             name: String::from("ping"),
             description: String::from("Ping the bot"),
-            options: Vec::new(),
+            options: Vec::new().into(),
         }
     }
 
-    async fn application_command(&mut self, ctx: Context, interaction: ApplicationCommandInteraction) -> Result<()> {
+    async fn application_command(&mut self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
         interaction
             .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("Pong!").ephemeral(true)))
             .await?;

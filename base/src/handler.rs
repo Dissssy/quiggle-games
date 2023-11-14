@@ -26,7 +26,9 @@ impl Handler {
     }
     pub async fn register_commands(&self, http: &Arc<serenity::http::Http>) -> Result<()> {
         let mut commands = self.commands.lock().await;
+        #[cfg(feature = "ping")]
         commands.register(http, Arc::new(Mutex::new(qg_ping::command()))).await?;
+        commands.register(http, Arc::new(Mutex::new(qg_tictactoe::command()))).await?;
         commands.finalize_registration(http).await?;
         Ok(())
     }
@@ -46,14 +48,22 @@ impl EventHandler for Handler {
             Interaction::Ping(p) => {
                 log::info!("Ping interaction {}", format!("{:?}", p).blue());
             }
-            Interaction::ApplicationCommand(cmd) => {
+            Interaction::ApplicationCommand(mut cmd) => {
                 let name = cmd.data.name.clone();
                 if let Some(command) = {
                     let commands = self.commands.lock().await;
                     commands.find(|c| c == name)
                 } {
-                    if let Err(e) = command.lock().await.application_command(ctx, cmd).await {
+                    if let Err(e) = command.lock().await.application_command(&ctx, &mut cmd).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                        if let Err(e) = cmd
+                            .create_interaction_response(&ctx.http, |f| {
+                                f.interaction_response_data(|d| d.content(format!("Error handling command `{}`: {}", name, e)).ephemeral(true))
+                            })
+                            .await
+                        {
+                            log::error!("Error creating interaction response: {}", e);
+                        }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
@@ -65,14 +75,22 @@ impl EventHandler for Handler {
                     }
                 }
             }
-            Interaction::MessageComponent(cmp) => {
+            Interaction::MessageComponent(mut cmp) => {
                 let name = cmp.data.custom_id.clone();
                 if let Some(command) = {
                     let commands = self.commands.lock().await;
                     commands.find(|c| name.starts_with(c))
                 } {
-                    if let Err(e) = command.lock().await.message_component(ctx, cmp).await {
+                    if let Err(e) = command.lock().await.message_component(&ctx, &mut cmp).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                        if let Err(e) = cmp
+                            .create_interaction_response(&ctx.http, |f| {
+                                f.interaction_response_data(|d| d.content(format!("Error handling command `{}`: {}", name, e)).ephemeral(true))
+                            })
+                            .await
+                        {
+                            log::error!("Error creating interaction response: {}", e);
+                        }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
@@ -84,15 +102,21 @@ impl EventHandler for Handler {
                     }
                 }
             }
-            Interaction::Autocomplete(act) => {
+            Interaction::Autocomplete(mut act) => {
                 log::info!("Autocomplete interaction {}", format!("{:?}", act).blue());
                 let name = act.data.name.clone();
                 if let Some(command) = {
                     let commands = self.commands.lock().await;
                     commands.find(|c| c == name)
                 } {
-                    if let Err(e) = command.lock().await.autocomplete(ctx, act).await {
+                    if let Err(e) = command.lock().await.autocomplete(&ctx, &mut act).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                        if let Err(e) = act
+                            .create_autocomplete_response(&ctx.http, |f| f.add_string_choice(format!("Error handling command `{}`: {}", name, e), "epicfail"))
+                            .await
+                        {
+                            log::error!("Error creating interaction response: {}", e);
+                        }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
@@ -104,15 +128,23 @@ impl EventHandler for Handler {
                     }
                 }
             }
-            Interaction::ModalSubmit(mdl) => {
+            Interaction::ModalSubmit(mut mdl) => {
                 log::info!("Modal submit interaction {}", format!("{:?}", mdl).blue());
                 let name = mdl.data.custom_id.clone();
                 if let Some(command) = {
                     let commands = self.commands.lock().await;
                     commands.find(|c| name.starts_with(c))
                 } {
-                    if let Err(e) = command.lock().await.modal_submit(ctx, mdl).await {
+                    if let Err(e) = command.lock().await.modal_submit(&ctx, &mut mdl).await {
                         log::error!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
+                        if let Err(e) = mdl
+                            .create_interaction_response(&ctx.http, |f| {
+                                f.interaction_response_data(|d| d.content(format!("Error handling command `{}`: {}", name, e)).ephemeral(true))
+                            })
+                            .await
+                        {
+                            log::error!("Error creating interaction response: {}", e);
+                        }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
