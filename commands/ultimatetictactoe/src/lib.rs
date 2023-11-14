@@ -88,6 +88,7 @@ impl qg_shared::Command for UltimateTicTacToe {
                 inviter: interaction.user.id,
                 invitee: other.id,
             }),
+            last_time: qg_shared::current_time()?,
         };
 
         game.send(ctx, interaction).await?;
@@ -164,6 +165,7 @@ impl Action {
 pub struct Game {
     players: CycleVec<Player>,
     gamestate: State,
+    last_time: u64,
 }
 
 impl Game {
@@ -186,13 +188,17 @@ impl Game {
                             .await?;
                         let pid = self.players.current().ok_or(anyhow!("Player not found"))?.id.0;
                         if pid != interaction.user.id.0 {
-                            ctx.http
-                                .get_user(pid)
-                                .await?
-                                .create_dm_channel(&ctx.http)
-                                .await?
-                                .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
-                                .await?;
+                            let now = qg_shared::current_time()?;
+                            if now.saturating_sub(self.last_time) > 0 {
+                                ctx.http
+                                    .get_user(pid)
+                                    .await?
+                                    .create_dm_channel(&ctx.http)
+                                    .await?
+                                    .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
+                                    .await?;
+                            }
+                            self.last_time = now;
                         }
                     }
                     Action::Decline => {
@@ -229,30 +235,39 @@ impl Game {
                             }
                         };
                         if let Some(winner) = game.board.check_winner(&self.players) {
-                            if let Outcome::Win(p) = winner {
-                                for player in self.players.all() {
-                                    ctx.http
-                                        .get_user(player.id.0)
-                                        .await?
-                                        .create_dm_channel(&ctx.http)
-                                        .await?
-                                        .send_message(&ctx.http, |m| {
-                                            m.content(format!("You {} in {}", if *player == p { "won" } else { "got your ass handed to you" }, interaction.message.link()))
+                            for player in self.players.all() {
+                                ctx.http
+                                    .get_user(player.id.0)
+                                    .await?
+                                    .create_dm_channel(&ctx.http)
+                                    .await?
+                                    .send_message(&ctx.http, |m| {
+                                        m.content({
+                                            if let Outcome::Win(p) = winner {
+                                                format!("You {} in {}", if *player == p { "won" } else { "got your ass handed to you" }, interaction.message.link())
+                                            } else {
+                                                format!("You tied in {}", interaction.message.link())
+                                            }
                                         })
-                                        .await?;
-                                }
+                                    })
+                                    .await?;
                             }
 
                             self.gamestate = State::Finished(WonGame { winner, board: game.board.clone() });
                         } else if next_player {
                             self.players.next_player();
-                            ctx.http
-                                .get_user(self.players.current().ok_or(anyhow!("Player not found"))?.id.0)
-                                .await?
-                                .create_dm_channel(&ctx.http)
-                                .await?
-                                .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
-                                .await?;
+
+                            let now = qg_shared::current_time()?;
+                            if now.saturating_sub(self.last_time) > 60 {
+                                ctx.http
+                                    .get_user(self.players.current().ok_or(anyhow!("Player not found"))?.id.0)
+                                    .await?
+                                    .create_dm_channel(&ctx.http)
+                                    .await?
+                                    .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
+                                    .await?;
+                            }
+                            self.last_time = now;
                         }
 
                         interaction
@@ -469,9 +484,9 @@ impl Space {
 impl std::fmt::Display for Space {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Space::X => write!(f, "❌"),
-            Space::O => write!(f, "⭕"),
-            Space::Empty => write!(f, "⬛"),
+            Space::X => write!(f, "🇽"),
+            Space::O => write!(f, "🇴"),
+            Space::Empty => write!(f, "."),
         }
     }
 }
@@ -492,7 +507,7 @@ pub struct Awaiting {
 
 impl Awaiting {
     fn challenge_message(&self) -> String {
-        format!("{} has challenged {} to a game of Tic Tac Toe", self.inviter.mention(), self.invitee.mention())
+        format!("{} has challenged {} to a game of Ultimate Tic Tac Toe", self.inviter.mention(), self.invitee.mention())
     }
 }
 

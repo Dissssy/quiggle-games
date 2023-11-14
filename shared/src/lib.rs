@@ -238,3 +238,8 @@ impl<T> CycleVec<T> {
         self.vec.iter()
     }
 }
+
+pub fn current_time() -> Result<u64> {
+    let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+    Ok(time)
+}
