@@ -67,7 +67,7 @@ impl qg_shared::Command for TicTacToe {
         #[cfg(not(feature = "allow-self-play"))]
         {
             let individuals = {
-                let mut individuals = players.iter().map(|(id, _)| id).collect::<Vec<&UserId>>();
+                let mut individuals = players.iter().map(|player| player.0).collect::<Vec<UserId>>();
                 individuals.sort();
                 individuals.dedup();
                 individuals
