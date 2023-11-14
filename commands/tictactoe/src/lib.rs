@@ -244,14 +244,15 @@ impl Game {
     async fn render(&self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
         match &self.gamestate {
             State::Cancelled(reason) => {
-                interaction.message.edit(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f)).await?;
+                interaction
+                    .edit_original_interaction_response(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f))
+                    .await?;
             }
             State::AwaitingApproval(u) => {
                 let mut content = self.title_card()?;
                 content.push_str(&format!("{} has invited you to a game of Tic Tac Toe. Do you accept?", u.mention()));
                 interaction
-                    .message
-                    .edit(&ctx.http, |d| {
+                    .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
                             c.create_action_row(|a| {
                                 a.create_button(|b| b.style(ButtonStyle::Success).label("Accept").custom_id(Action::Accept.to_custom_id("tictactoe")))
@@ -267,8 +268,7 @@ impl Game {
                 content.push_str(&format!("It is {}'s turn [{}]", current_player.0.mention(), current_player.1));
 
                 interaction
-                    .message
-                    .edit(&ctx.http, |d| {
+                    .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
                             for x in 0..=2 {
                                 c.create_action_row(|a| {
@@ -295,8 +295,7 @@ impl Game {
                 // }
 
                 interaction
-                    .message
-                    .edit(&ctx.http, |d| {
+                    .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
                             for x in 0..=2 {
                                 c.create_action_row(|a| {
