@@ -29,6 +29,7 @@ impl Handler {
         #[cfg(feature = "ping")]
         commands.register(http, Arc::new(Mutex::new(qg_ping::command()))).await?;
         commands.register(http, Arc::new(Mutex::new(qg_tictactoe::command()))).await?;
+        commands.register(http, Arc::new(Mutex::new(qg_ulttictactoe::command()))).await?;
         commands.finalize_registration(http).await?;
         Ok(())
     }

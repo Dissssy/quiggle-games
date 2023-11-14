@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 use base64::Engine;
+use rand::seq::SliceRandom;
+use serde::{Deserialize, Serialize};
 use serenity::{
     builder::CreateApplicationCommand,
     client::Context,
@@ -211,4 +213,28 @@ where
         data
     };
     Ok(serde_json::from_slice(&data)?)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CycleVec<T> {
+    vec: Vec<T>,
+    index: usize,
+}
+
+impl<T> CycleVec<T> {
+    pub fn new(vec: Vec<T>) -> Self {
+        // shuffle
+        let mut vec = vec;
+        vec.shuffle(&mut rand::thread_rng());
+        Self { vec, index: 0 }
+    }
+    pub fn next_player(&mut self) {
+        self.index = (self.index + 1) % self.vec.len();
+    }
+    pub fn current(&self) -> Option<&T> {
+        self.vec.get(self.index)
+    }
+    pub fn all(&self) -> impl Iterator<Item = &T> {
+        self.vec.iter()
+    }
 }

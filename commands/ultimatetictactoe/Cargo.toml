@@ -1,12 +1,12 @@
 [package]
-name = "qg-tictactoe"
+name = "qg-ulttictactoe"
 version = "0.2.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+default = ["allow-self-play"]
 allow-self-play = []
 
 [dependencies]

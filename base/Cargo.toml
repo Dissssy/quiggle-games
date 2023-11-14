@@ -17,8 +17,9 @@ qg-shared = {path = "../shared"}
 shuttle-runtime = "0.32.0"
 shuttle-serenity = "0.32.0"
 shuttle-secrets = "0.32.0"
-qg-tictactoe = { path = "../commands/tictactoe" }
 qg-ping = { path = "../commands/ping", optional = true }
+qg-tictactoe = { path = "../commands/tictactoe" }
+qg-ulttictactoe = { path = "../commands/ultimatetictactoe" }
 
 
 [dependencies.serenity]

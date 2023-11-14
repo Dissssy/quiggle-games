@@ -15,9 +15,9 @@ use qg_shared::{
             mention::Mentionable,
         },
     },
+    CycleVec,
 };
 
-use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 pub fn command() -> TicTacToe {
@@ -524,28 +524,4 @@ pub enum Outcome {
 pub struct Player {
     id: UserId,
     piece: Space,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CycleVec<T> {
-    vec: Vec<T>,
-    index: usize,
-}
-
-impl<T> CycleVec<T> {
-    pub fn new(vec: Vec<T>) -> Self {
-        // shuffle
-        let mut vec = vec;
-        vec.shuffle(&mut rand::thread_rng());
-        Self { vec, index: 0 }
-    }
-    pub fn next_player(&mut self) {
-        self.index = (self.index + 1) % self.vec.len();
-    }
-    pub fn current(&self) -> Option<&T> {
-        self.vec.get(self.index)
-    }
-    pub fn all(&self) -> impl Iterator<Item = &T> {
-        self.vec.iter()
-    }
 }
