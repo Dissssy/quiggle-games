@@ -318,7 +318,9 @@ impl Game {
                 let mut content = self.title_card()?;
                 let current_player = self.players.current().ok_or(anyhow!("Player not found"))?;
                 content.push_str(&format!("It is {}'s turn [{}]", current_player.id.mention(), current_player.piece));
-
+                if game.board.selected.is_none() {
+                    content.push_str(" (Select a board)");
+                }
                 content.push_str(&game.board.string_map());
 
                 interaction
