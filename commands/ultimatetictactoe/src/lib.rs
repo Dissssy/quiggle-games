@@ -474,11 +474,16 @@ impl Space {
             Space::Empty => ButtonStyle::Secondary,
         }
     }
-    fn string_with_ansi(&self) -> String {
-        match self {
+    fn string_with_ansi(&self, selected: bool) -> String {
+        let thing = match self {
             Space::X => format!("{}", "X".red()),
             Space::O => format!("{}", "O".blue()),
             Space::Empty => format!("{}", "_".black()),
+        };
+        if selected {
+            format!("{}", thing.on_black())
+        } else {
+            thing
         }
     }
 }
@@ -642,7 +647,7 @@ impl MetaBoard {
                     let board = space.ignore_space();
                     for (bx, brow) in board.spaces.iter().enumerate() {
                         for (by, bspace) in brow.iter().enumerate() {
-                            strings[(x * 3) + bx].push_str(bspace.string_with_ansi().as_str());
+                            strings[(x * 3) + bx].push_str(bspace.string_with_ansi(false).as_str());
                             if by != 2 {
                                 strings[(x * 3) + bx].push(' ');
                             } else if y != 2 {
@@ -714,9 +719,11 @@ impl MetaBoard {
                     if let MetaSpace::Empty(_) = space {
                         for (bx, brow) in board.spaces.iter().enumerate() {
                             for (by, bspace) in brow.iter().enumerate() {
-                                strings[(x * 3) + bx].push_str(bspace.string_with_ansi().as_str());
+                                let selected = if let Some((sx, sy)) = self.selected { sx == x && sy == y } else { false };
+
+                                strings[(x * 3) + bx].push_str(bspace.string_with_ansi(selected).as_str());
                                 if by != 2 {
-                                    strings[(x * 3) + bx].push(' ');
+                                    strings[(x * 3) + bx].push_str(&if selected { " ".on_black().to_string() } else { " ".to_string() });
                                 } else if y != 2 {
                                     strings[(x * 3) + bx].push_str(" | ");
                                 }
@@ -726,7 +733,7 @@ impl MetaBoard {
                         let space_string = if let MetaSpace::Tie(_) = space {
                             "?".green().to_string()
                         } else {
-                            space.ignore_board().string_with_ansi()
+                            space.ignore_board().string_with_ansi(false)
                         };
                         for (bx, brow) in board.spaces.iter().enumerate() {
                             for (by, _bspace) in brow.iter().enumerate() {
@@ -839,10 +846,10 @@ fn all_equal(x: &MetaSpace, y: &MetaSpace, z: &MetaSpace) -> Option<Space> {
     };
     qg_shared::log::trace!(
         "x: {}, y: {}, z: {}, won: {}",
-        x.ignore_board().string_with_ansi(),
-        y.ignore_board().string_with_ansi(),
-        z.ignore_board().string_with_ansi(),
-        won.unwrap_or(Space::Empty).string_with_ansi()
+        x.ignore_board().string_with_ansi(false),
+        y.ignore_board().string_with_ansi(false),
+        z.ignore_board().string_with_ansi(false),
+        won.unwrap_or(Space::Empty).string_with_ansi(false)
     );
     won
 }
