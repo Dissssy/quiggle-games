@@ -1,6 +1,7 @@
 use qg_shared::{
     anyhow::{anyhow, Result},
     colored::Colorize,
+    log,
     serenity::{
         builder::CreateApplicationCommand,
         client::Context,
@@ -62,14 +63,17 @@ impl qg_shared::Command for UltimateTicTacToe {
         players.push({
             match interaction.data.options.first().ok_or(qg_shared::anyhow::anyhow!("No opponent specified"))?.resolved.as_ref() {
                 Some(CommandDataOptionValue::User(user, _m)) => {
+                    if user.bot {
+                        return Err(qg_shared::anyhow::anyhow!("You cannot play against a bot"));
+                    }
+
                     other = user.clone();
                     Player { id: other.id, piece: Space::O }
                 }
                 _ => return Err(qg_shared::anyhow::anyhow!("No opponent specified")),
             }
         });
-        #[cfg(not(feature = "allow-self-play"))]
-        {
+        if !std::env::var("ALLOW_SELF_PLAY").ok().and_then(|s| s.parse::<bool>().ok()).unwrap_or(false) {
             let individuals = {
                 let mut individuals = players.iter().map(|player| player.id).collect::<Vec<UserId>>();
                 individuals.sort();
@@ -109,7 +113,10 @@ impl qg_shared::Command for UltimateTicTacToe {
             qg_shared::deserialize::<Game>(game)?
         };
 
-        game.do_action(ctx, interaction, action).await?;
+        game.do_action(ctx, interaction, action).await.map_err(|e| {
+            log::error!("Error doing action: {}", e);
+            e
+        })?;
 
         Ok(())
     }
@@ -173,74 +180,76 @@ impl Game {
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 if interaction.user.id != u.invitee {
-                    interaction
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("You are not the invitee").ephemeral(true)))
-                        .await?;
-                    return Ok(());
+                    return Err(anyhow!("You are not the invitee"));
                 }
                 match action {
                     Action::Accept => {
                         self.gamestate = State::InProgress(InProgress::new());
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| {
-                                f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                            })
-                            .await?;
+
                         let pid = self.players.current().ok_or(anyhow!("Player not found"))?.id.0;
                         if pid != interaction.user.id.0 {
                             let now = qg_shared::current_time()?;
+
                             if now.saturating_sub(self.last_time) > 0 {
                                 ctx.http
                                     .get_user(pid)
-                                    .await?
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error getting user: {}", e);
+                                        e
+                                    })?
                                     .create_dm_channel(&ctx.http)
-                                    .await?
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error creating dm channel: {}", e);
+                                        e
+                                    })?
                                     .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
-                                    .await?;
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error sending message to user: {}", e);
+                                        e
+                                    })?;
                             }
+
                             self.last_time = now;
                         }
                     }
                     Action::Decline => {
                         self.gamestate = State::Cancelled("Declined".into());
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| {
-                                f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                            })
-                            .await?;
                     }
                     _ => {
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid action: {}", action.name())).ephemeral(true)))
-                            .await?;
+                        return Err(anyhow!("Invalid action: {}", action.name()));
                     }
                 }
             }
             State::InProgress(ref mut game) => {
                 if self.players.current().map(|s| s.id) != Some(interaction.user.id) {
-                    interaction
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("It is not your turn").ephemeral(true)))
-                        .await?;
-                    return Ok(());
+                    return Err(anyhow!("It is not your turn"));
                 }
                 match action {
                     Action::Place(x, y) => {
                         let next_player = match game.make_move(x, y, self.players.current().ok_or(anyhow!("Player not found"))?.piece, &self.players) {
                             Ok(b) => b,
                             Err(e) => {
-                                interaction
-                                    .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid move: {}", e)).ephemeral(true)))
-                                    .await?;
-                                return Ok(());
+                                return Err(anyhow!("Invalid move: {}", e));
                             }
                         };
                         if let Some(winner) = game.board.check_winner(&self.players) {
                             for player in self.players.all() {
                                 ctx.http
                                     .get_user(player.id.0)
-                                    .await?
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error getting user: {}", e);
+                                        e
+                                    })?
                                     .create_dm_channel(&ctx.http)
-                                    .await?
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error creating dm channel: {}", e);
+                                        e
+                                    })?
                                     .send_message(&ctx.http, |m| {
                                         m.content({
                                             if let Outcome::Win(p) = winner {
@@ -250,7 +259,11 @@ impl Game {
                                             }
                                         })
                                     })
-                                    .await?;
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error sending message to user: {}", e);
+                                        e
+                                    })?;
                             }
 
                             self.gamestate = State::Finished(WonGame { winner, board: game.board.clone() });
@@ -261,30 +274,34 @@ impl Game {
                             if now.saturating_sub(self.last_time) > 60 {
                                 ctx.http
                                     .get_user(self.players.current().ok_or(anyhow!("Player not found"))?.id.0)
-                                    .await?
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error getting user: {}", e);
+                                        e
+                                    })?
                                     .create_dm_channel(&ctx.http)
-                                    .await?
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error creating dm channel: {}", e);
+                                        e
+                                    })?
                                     .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
-                                    .await?;
+                                    .await
+                                    .map_err(|e| {
+                                        log::error!("Error sending message to user: {}", e);
+                                        e
+                                    })?;
                             }
                             self.last_time = now;
                         }
-
-                        interaction
-                            .create_interaction_response(&ctx, |f| f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage))
-                            .await?
                     }
                     _ => {
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid action: {}", action.name())).ephemeral(true)))
-                            .await?;
+                        return Err(anyhow!("Invalid action: {}", action.name()));
                     }
                 }
             }
             _ => {
-                interaction
-                    .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid action: {}", action.name())).ephemeral(true)))
-                    .await?;
+                return Err(anyhow!("Invalid action: {}", action.name()));
             }
         }
 
@@ -297,12 +314,23 @@ impl Game {
         match &self.gamestate {
             State::Cancelled(reason) => {
                 interaction
-                    .edit_original_interaction_response(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f))
+                    .create_interaction_response(&ctx.http, |f| {
+                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                    })
                     .await?;
+                interaction
+                    .edit_original_interaction_response(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f))
+                    .await
+                    .map_err(|e| {
+                        log::error!("Error editing interaction response: {}", e);
+                        e
+                    })?;
             }
             State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
+
                 content.push_str(u.challenge_message().as_str());
+
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
@@ -312,18 +340,31 @@ impl Game {
                             })
                         })
                     })
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        log::error!("Error editing interaction response: {}", e);
+                        e
+                    })?;
             }
             State::InProgress(game) => {
                 let mut content = self.title_card()?;
                 let current_player = self.players.current().ok_or(anyhow!("Player not found"))?;
+
                 content.push_str(&format!("It is {}'s turn [{}]", current_player.id.mention(), current_player.piece));
                 if game.board.selected.is_none() {
                     content.push_str(" (Select a board)");
                 }
+
                 content.push_str(&game.board.string_map());
 
                 interaction
+                    .create_interaction_response(&ctx.http, |f| {
+                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                    })
+                    .await?;
+
+                interaction
+                    // .message
                     .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
                             for x in 0..=2 {
@@ -340,7 +381,11 @@ impl Game {
                             c
                         })
                     })
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        log::error!("Error editing interaction response: {}", e);
+                        e
+                    })?;
             }
             State::Finished(won_game) => {
                 let mut content = self.title_card()?;
@@ -348,6 +393,11 @@ impl Game {
 
                 content.push_str(&won_game.board.raw_string_map());
 
+                interaction
+                    .create_interaction_response(&ctx.http, |f| {
+                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                    })
+                    .await?;
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
@@ -475,15 +525,24 @@ impl Space {
         }
     }
     fn string_with_ansi(&self, selected: bool) -> String {
-        let thing = match self {
-            Space::X => format!("{}", "X".red()),
-            Space::O => format!("{}", "O".blue()),
-            Space::Empty => format!("{}", "_".black()),
-        };
-        if selected {
-            format!("{}", thing.on_black())
-        } else {
-            thing
+        match self {
+            Space::X => {
+                let s = format!("{}", "X".red());
+                if selected {
+                    s.underline().to_string()
+                } else {
+                    s
+                }
+            }
+            Space::O => {
+                let s = format!("{}", "O".blue());
+                if selected {
+                    s.underline().to_string()
+                } else {
+                    s
+                }
+            }
+            Space::Empty => format!("{}", if selected { "_".white() } else { "_".black() }),
         }
     }
 }
@@ -723,7 +782,8 @@ impl MetaBoard {
 
                                 strings[(x * 3) + bx].push_str(bspace.string_with_ansi(selected).as_str());
                                 if by != 2 {
-                                    strings[(x * 3) + bx].push_str(&if selected { " ".on_black().to_string() } else { " ".to_string() });
+                                    // strings[(x * 3) + bx].push_str(&if selected { " ".on_black().to_string() } else { " ".to_string() });
+                                    strings[(x * 3) + bx].push(' ');
                                 } else if y != 2 {
                                     strings[(x * 3) + bx].push_str(" | ");
                                 }
@@ -844,7 +904,7 @@ fn all_equal(x: &MetaSpace, y: &MetaSpace, z: &MetaSpace) -> Option<Space> {
         // else None
         _ => None,
     };
-    qg_shared::log::trace!(
+    log::trace!(
         "x: {}, y: {}, z: {}, won: {}",
         x.ignore_board().string_with_ansi(false),
         y.ignore_board().string_with_ansi(false),

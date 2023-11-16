@@ -13,6 +13,11 @@ async fn serenity(#[shuttle_secrets::Secrets] secret_store: shuttle_secrets::Sec
         }
     };
 
+    if let Some(b) = secret_store.get("ALLOW_SELF_PLAY").and_then(|f| f.parse::<bool>().ok()) {
+        qg_shared::log::info!("ALLOW_SELF_PLAY set to {}", b);
+        std::env::set_var("ALLOW_SELF_PLAY", b.to_string());
+    }
+
     let dev_server = secret_store.get("DEV_SERVER").and_then(|f| f.parse::<serenity::model::id::GuildId>().ok());
 
     // replace with actually necessary intents eventually lol

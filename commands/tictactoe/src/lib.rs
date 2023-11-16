@@ -61,14 +61,17 @@ impl qg_shared::Command for TicTacToe {
         players.push({
             match interaction.data.options.first().ok_or(qg_shared::anyhow::anyhow!("No opponent specified"))?.resolved.as_ref() {
                 Some(CommandDataOptionValue::User(user, _m)) => {
+                    if user.bot {
+                        return Err(qg_shared::anyhow::anyhow!("You cannot play against a bot"));
+                    }
+
                     other = user.clone();
                     Player { id: other.id, piece: Space::O }
                 }
                 _ => return Err(qg_shared::anyhow::anyhow!("No opponent specified")),
             }
         });
-        #[cfg(not(feature = "allow-self-play"))]
-        {
+        if !std::env::var("ALLOW_SELF_PLAY").ok().and_then(|s| s.parse::<bool>().ok()).unwrap_or(false) {
             let individuals = {
                 let mut individuals = players.iter().map(|player| player.id).collect::<Vec<UserId>>();
                 individuals.sort();
@@ -172,10 +175,7 @@ impl Game {
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 if interaction.user.id != u.invitee {
-                    interaction
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("You are not the invitee").ephemeral(true)))
-                        .await?;
-                    return Ok(());
+                    return Err(anyhow!("You are not the invitee"));
                 }
                 match action {
                     Action::Accept => {
@@ -184,11 +184,11 @@ impl Game {
                                 spaces: vec![vec![Space::Empty; 3]; 3],
                             },
                         });
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| {
-                                f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                            })
-                            .await?;
+                        // interaction
+                        //     .create_interaction_response(&ctx.http, |f| {
+                        //         f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                        //     })
+                        //     .await?;
                         let pid = self.players.current().ok_or(anyhow!("Player not found"))?.id.0;
                         if pid != interaction.user.id.0 {
                             let now = qg_shared::current_time()?;
@@ -206,33 +206,25 @@ impl Game {
                     }
                     Action::Decline => {
                         self.gamestate = State::Cancelled("Declined".into());
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| {
-                                f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                            })
-                            .await?;
+                        // interaction
+                        //     .create_interaction_response(&ctx.http, |f| {
+                        //         f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                        //     })
+                        //     .await?;
                     }
                     _ => {
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid action: {}", action.name())).ephemeral(true)))
-                            .await?;
+                        return Err(anyhow!("Invalid action"));
                     }
                 }
             }
             State::InProgress(ref mut game) => {
                 if self.players.current().map(|s| s.id) != Some(interaction.user.id) {
-                    interaction
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content("It is not your turn").ephemeral(true)))
-                        .await?;
-                    return Ok(());
+                    return Err(anyhow!("It is not your turn"));
                 }
                 match action {
                     Action::Place(x, y) => {
                         if let Err(e) = game.make_move(x, y, self.players.current().ok_or(anyhow!("Player not found"))?.piece) {
-                            interaction
-                                .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid move: {}", e)).ephemeral(true)))
-                                .await?;
-                            return Ok(());
+                            return Err(anyhow!("Invalid move: {}", e));
                         }
                         if let Some(winner) = game.board.check_winner(&self.players) {
                             for player in self.players.all() {
@@ -270,21 +262,17 @@ impl Game {
                             self.last_time = now;
                         }
 
-                        interaction
-                            .create_interaction_response(&ctx, |f| f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage))
-                            .await?
+                        // interaction
+                        //     .create_interaction_response(&ctx, |f| f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage))
+                        //     .await?
                     }
                     _ => {
-                        interaction
-                            .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid action: {}", action.name())).ephemeral(true)))
-                            .await?;
+                        return Err(anyhow!("Invalid action: {}", action.name()));
                     }
                 }
             }
             _ => {
-                interaction
-                    .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Invalid action: {}", action.name())).ephemeral(true)))
-                    .await?;
+                return Err(anyhow!("Invalid action: {}", action.name()));
             }
         }
 
@@ -296,6 +284,11 @@ impl Game {
     async fn render(&self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
         match &self.gamestate {
             State::Cancelled(reason) => {
+                interaction
+                    .create_interaction_response(&ctx.http, |f| {
+                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                    })
+                    .await?;
                 interaction
                     .edit_original_interaction_response(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f))
                     .await?;
@@ -318,7 +311,11 @@ impl Game {
                 let mut content = self.title_card()?;
                 let current_player = self.players.current().ok_or(anyhow!("Player not found"))?;
                 content.push_str(&format!("It is {}'s turn [{}]", current_player.id.mention(), current_player.piece));
-
+                interaction
+                    .create_interaction_response(&ctx.http, |f| {
+                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                    })
+                    .await?;
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
@@ -341,7 +338,11 @@ impl Game {
             State::Finished(won_game) => {
                 let mut content = self.title_card()?;
                 content.push_str(won_game.win_message().as_str());
-
+                interaction
+                    .create_interaction_response(&ctx.http, |f| {
+                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
+                    })
+                    .await?;
                 interaction
                     .edit_original_interaction_response(&ctx.http, |d| {
                         d.content(content).components(|c| {
