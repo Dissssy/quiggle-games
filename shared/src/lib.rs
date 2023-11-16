@@ -191,7 +191,8 @@ impl From<CommandOptionType> for serenity::model::application::command::CommandO
 }
 
 pub fn serialize(data: &impl serde::Serialize) -> Result<String> {
-    let data = serde_json::to_string(data)?.into_bytes();
+    // let data = serde_json::to_string(data)?.into_bytes();
+    let data = rmp_serde::encode::to_vec(data)?;
     let data = {
         let mut d = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         std::io::Write::write_all(&mut d, &data)?;
@@ -212,7 +213,13 @@ where
         std::io::Read::read_to_end(&mut d, &mut data)?;
         data
     };
-    Ok(serde_json::from_slice(&data)?)
+    Ok(match rmp_serde::decode::from_slice::<T>(&data) {
+        Ok(data) => data,
+        Err(e) => {
+            // since we used to use serde, we're gonna try that for backwards compatibility
+            serde_json::from_slice::<T>(&data).map_err(|_| e)? // if this fails, we'll return the original error
+        }
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
