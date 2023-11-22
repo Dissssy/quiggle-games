@@ -1,6 +1,6 @@
 [package]
 name = "qg-shared"
-version = "0.3.5"
+version = "0.4.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -21,4 +21,4 @@ rmp-serde = "1.1.2"
 [dependencies.serenity]
 version = "0.11.7"
 default-features = false
-features = ["model"]
+features = ["model", "cache"]

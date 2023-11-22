@@ -15,6 +15,7 @@ pub use anyhow;
 pub use async_trait::async_trait;
 pub use colored;
 pub use log;
+pub use rand;
 pub use serenity;
 
 use colored::*;
@@ -249,4 +250,28 @@ impl<T> CycleVec<T> {
 pub fn current_time() -> Result<u64> {
     let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
     Ok(time)
+}
+
+pub fn format_duration(t: u64) -> String {
+    let mut t = t;
+    let mut s = String::new();
+    if t >= 86400 {
+        let d = t / 86400;
+        t %= 86400;
+        s.push_str(&format!("{}d ", d));
+    }
+    if t >= 3600 {
+        let h = t / 3600;
+        t %= 3600;
+        s.push_str(&format!("{}h ", h));
+    }
+    if t >= 60 {
+        let m = t / 60;
+        t %= 60;
+        s.push_str(&format!("{}m ", m));
+    }
+    if t > 0 {
+        s.push_str(&format!("{}s", t));
+    }
+    s.trim().to_string()
 }

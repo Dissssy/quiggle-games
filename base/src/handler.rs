@@ -30,6 +30,7 @@ impl Handler {
         commands.register(http, Arc::new(Mutex::new(qg_ping::command()))).await?;
         commands.register(http, Arc::new(Mutex::new(qg_tictactoe::command()))).await?;
         commands.register(http, Arc::new(Mutex::new(qg_ulttictactoe::command()))).await?;
+        commands.register(http, Arc::new(Mutex::new(qg_slidingpuzzle::command()))).await?;
         commands.finalize_registration(http).await?;
         Ok(())
     }
@@ -94,7 +95,7 @@ impl EventHandler for Handler {
                             .create_interaction_response(&ctx.http, |f| f.kind(serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage))
                             .await
                         {
-                            log::error!("Error creating interaction response: {}", e);
+                            log::trace!("Error creating interaction response: {}", e);
                         }
                     }
                 } else {

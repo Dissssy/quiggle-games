@@ -4,6 +4,6 @@ members = [
     "shared",
     "commands/ping",
     "commands/tictactoe",
-    "commands/ultimatetictactoe"
+    "commands/ultimatetictactoe", "commands/slidingpuzzle",
 ]
 resolver = "2"
