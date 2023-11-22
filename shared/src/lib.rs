@@ -272,6 +272,8 @@ pub fn format_duration(t: u64) -> String {
     }
     if t > 0 {
         s.push_str(&format!("{}s", t));
+    } else if s.is_empty() {
+        s.push_str("0s");
     }
     s.trim().to_string()
 }

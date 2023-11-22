@@ -43,7 +43,7 @@ impl qg_shared::Command for SlidingPuzzle {
         let game = Game {
             player: Player { id: interaction.user.id },
             gamestate: State::AwaitingApproval(Awaiting { inviter: interaction.user.id }),
-            start_time: qg_shared::current_time()?,
+            start_time: None,
             moves: 0,
             difficulty: Difficulty::Easy,
             size: Size::Three,
@@ -230,7 +230,7 @@ impl Action {
 pub struct Game {
     player: Player,
     gamestate: State,
-    start_time: u64,
+    start_time: Option<u64>,
     moves: u64,
     difficulty: Difficulty,
     size: Size,
@@ -238,6 +238,8 @@ pub struct Game {
 
 impl Game {
     pub async fn do_action(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction, action: Action) -> Result<()> {
+        let shitstarted = qg_shared::current_time()?;
+        let mut updatetime = false;
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 if interaction.user.id != u.inviter {
@@ -266,17 +268,25 @@ impl Game {
                 }
                 match action {
                     Action::MoveTile(s, f) => {
+                        match self.start_time {
+                            None => {
+                                self.start_time = Some(qg_shared::current_time()?);
+                            }
+                            Some(_) => {}
+                        };
                         game.board.swap_checked(s, f)?;
                         self.moves += 1;
                         if game.board.check_winner() {
                             self.gamestate = State::Finished(WonGame {
                                 winner: Outcome {
-                                    elapsed: qg_shared::current_time()? - self.start_time,
+                                    elapsed: qg_shared::current_time()? - self.start_time.unwrap_or(qg_shared::current_time()?),
                                     moves: self.moves,
                                     player: self.player,
                                 },
                                 board: game.board.clone(),
                             });
+                        } else {
+                            updatetime = true;
                         }
                     }
                     _ => {
@@ -289,15 +299,33 @@ impl Game {
             }
         }
 
-        self.render(ctx, interaction).await.map_err(|e| {
+        if updatetime {
+            // add the difference between now and when the function started to the start time
+            let mut now = qg_shared::current_time()?;
+            now -= shitstarted;
+            if let Some(start_time) = self.start_time {
+                self.start_time = Some(start_time + now);
+            }
+        }
+
+        self.render(ctx, interaction, self.start_time).await.map_err(|e| {
             qg_shared::log::error!("Error rendering game: {}", e);
             e
         })?;
 
+        if updatetime {
+            // add the difference between now and when the function started to the start time
+            let mut now = qg_shared::current_time()?;
+            now -= shitstarted;
+            if let Some(start_time) = self.start_time {
+                self.start_time = Some(start_time + now);
+            }
+        }
+
         Ok(())
     }
 
-    async fn render(&self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
+    async fn render(&self, ctx: &Context, interaction: &mut MessageComponentInteraction, start_time: Option<u64>) -> Result<()> {
         match &self.gamestate {
             State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
@@ -344,7 +372,18 @@ impl Game {
                     .await?;
             }
             State::InProgress(game) => {
-                let content = self.title_card()?;
+                let mut content = self.title_card()?;
+                content.push_str(
+                    format!(
+                        "```ansi\nTime: {}\nMoves: {}\n```",
+                        match start_time {
+                            None => "0s (paused)".to_string().red(),
+                            Some(start_time) => qg_shared::format_duration(qg_shared::current_time()? - start_time).blue(),
+                        },
+                        self.moves.to_string().red(),
+                    )
+                    .as_str(),
+                );
                 interaction
                     .create_interaction_response(&ctx.http, |f| {
                         f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
