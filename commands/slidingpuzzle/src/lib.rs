@@ -212,6 +212,10 @@ impl Action {
                     s.parse::<usize>().ok()?
                 },
             )),
+            "InvalidMove" => Some(Self::InvalidMove({
+                let s = split.next()?;
+                s.parse::<usize>().ok()?
+            })),
             _ => None,
         }
     }
@@ -288,6 +292,9 @@ impl Game {
                         } else {
                             updatetime = true;
                         }
+                    }
+                    Action::InvalidMove(_) => {
+                        // do nothing
                     }
                     _ => {
                         return Err(anyhow!("Invalid action"));
@@ -714,7 +721,7 @@ impl Board {
             (Space::Value(v), None) => {
                 b.style(if v == (i + 1) as u8 { ButtonStyle::Success } else { ButtonStyle::Secondary })
                     .label(p.button_text(over_nine))
-                    .disabled(true)
+                    // .disabled(true)
                     .custom_id(Action::InvalidMove(i).to_custom_id("slidingpuzzle"));
             }
             // Value space, enabled if adjacent to empty space in a cardinal direction, Primary style unless in correct position, then Success style
