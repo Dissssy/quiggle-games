@@ -278,22 +278,19 @@ impl Game {
                                 },
                                 board: game.board.clone(),
                             });
-                            match db {
-                                Some(db) => {
-                                    // ensure the user is in the database first
-                                    let user = qg_shared::db::User::get_or_create(ctx, &self.player.id, db).await?;
-                                    // create an entry for the user in the slidingpuzzle table
-                                    qg_shared::db::SlidingPuzzle::create(
-                                        user.id as i32,
-                                        self.difficulty as i32,
-                                        self.size as i32,
-                                        self.moves as i32,
-                                        (qg_shared::current_time()? - self.start_time.unwrap_or(qg_shared::current_time()?)) as i32,
-                                        db,
-                                    )
-                                    .await?;
-                                }
-                                None => {}
+                            if let Some(db) = db {
+                                // ensure the user is in the database first
+                                let user = qg_shared::db::User::get_or_create(ctx, &self.player.id, db).await?;
+                                // create an entry for the user in the slidingpuzzle table
+                                qg_shared::db::SlidingPuzzle::create(
+                                    user.id as i32,
+                                    self.difficulty as i32,
+                                    self.size as i32,
+                                    self.moves as i32,
+                                    (qg_shared::current_time()? - self.start_time.unwrap_or(qg_shared::current_time()?)) as i32,
+                                    db,
+                                )
+                                .await?;
                             }
                         } else {
                             updatetime = true;

@@ -10,7 +10,11 @@ mod handler;
 async fn serenity(
     #[shuttle_secrets::Secrets] secret_store: shuttle_secrets::SecretStore,
     #[shuttle_shared_db::Postgres(
-        local_uri = &std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
+        local_uri = {
+            let mut s = String::new();
+            let _ = &std::io::Read::read_to_string(&mut std::fs::File::open("local_postgres_uri").expect("EXPECTED FILE `local_postgres_uri` IN EXECUTION DIR"), &mut s).expect("EXPECTED FILE `local_postgres_uri` IN EXECUTION DIR");
+            s
+        }.as_str(),
     )]
     db: sqlx::PgPool,
 ) -> shuttle_serenity::ShuttleSerenity {

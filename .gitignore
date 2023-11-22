@@ -2,3 +2,4 @@ target
 Secrets*.toml
 Cargo.lock
 rustc-ice*
+local_postgres_uri

@@ -3,8 +3,10 @@ use qg_shared::{
     colored::Colorize,
     log,
     serenity::all::*,
-    CycleVec,
+    CycleVec, OptTrans,
 };
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -78,7 +80,7 @@ impl qg_shared::Command for UltimateTicTacToe {
         Ok(())
     }
 
-    async fn message_component(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, _: &mut qg_shared::OptTrans<'_>) -> Result<()> {
+    async fn message_component(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, db: &mut qg_shared::OptTrans<'_>) -> Result<()> {
         let action = match Action::from_custom_id(&interaction.data.custom_id) {
             Some(action) => action,
             None => return Err(qg_shared::anyhow::anyhow!("Invalid action id")),
@@ -92,7 +94,7 @@ impl qg_shared::Command for UltimateTicTacToe {
             qg_shared::deserialize::<Game>(game)?
         };
 
-        game.do_action(ctx, interaction, action).await.map_err(|e| {
+        game.do_action(ctx, interaction, action, db).await.map_err(|e| {
             log::error!("Error doing action: {}", e);
             e
         })?;
@@ -155,7 +157,7 @@ pub struct Game {
 }
 
 impl Game {
-    pub async fn do_action(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, action: Action) -> Result<()> {
+    pub async fn do_action(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, action: Action, db: &mut OptTrans<'_>) -> Result<()> {
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 if interaction.user.id != u.invitee {
@@ -244,6 +246,22 @@ impl Game {
                                         log::error!("Error sending message to user: {}", e);
                                         e
                                     })?;
+                            }
+
+                            if let Some(db) = db {
+                                if let Some(winner) = winner.winner() {
+                                    let mut players: HashMap<UserId, qg_shared::db::User> = HashMap::new();
+
+                                    for player in self.players.all() {
+                                        players.insert(player.id, qg_shared::db::User::get_or_create(ctx, &player.id, db).await?);
+                                    }
+
+                                    for player in self.players.all() {
+                                        let user = &players[&player.id];
+                                        let opponent = &players[&self.players.all().find(|p| p.id != player.id).ok_or(anyhow!("Opponent not found"))?.id];
+                                        qg_shared::db::UltimateTicTacToe::create(user.id as i32, opponent.id as i32, player.id == winner.id, db).await?;
+                                    }
+                                }
                             }
 
                             self.gamestate = State::Finished(WonGame { winner, board: game.board.clone() });
@@ -976,6 +994,14 @@ impl Board {
 pub enum Outcome {
     Win(Player),
     Tie,
+}
+impl Outcome {
+    fn winner(&self) -> Option<Player> {
+        match self {
+            Outcome::Win(p) => Some(*p),
+            Outcome::Tie => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
