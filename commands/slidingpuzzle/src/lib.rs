@@ -195,9 +195,9 @@ impl Action {
             "SetSize" => {
                 let size = split.next()?;
                 Some(Self::SetSize(match size {
-                    "3" => Size::Three,
-                    "4" => Size::Four,
-                    "5" => Size::Five,
+                    "3x3" => Size::Three,
+                    "4x4" => Size::Four,
+                    "5x5" => Size::Five,
                     _ => return None,
                 }))
             }
