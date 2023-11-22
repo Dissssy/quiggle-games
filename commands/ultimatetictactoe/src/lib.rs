@@ -2,21 +2,7 @@ use qg_shared::{
     anyhow::{anyhow, Result},
     colored::Colorize,
     log,
-    serenity::{
-        builder::CreateApplicationCommand,
-        client::Context,
-        model::{
-            application::{
-                component::ButtonStyle,
-                interaction::{
-                    application_command::{ApplicationCommandInteraction, CommandDataOptionValue},
-                    message_component::MessageComponentInteraction,
-                },
-            },
-            id::UserId,
-            mention::Mentionable,
-        },
-    },
+    serenity::all::*,
     CycleVec,
 };
 
@@ -30,16 +16,6 @@ pub struct UltimateTicTacToe;
 
 #[qg_shared::async_trait]
 impl qg_shared::Command for UltimateTicTacToe {
-    fn register<'a>(&self, builder: &'a mut CreateApplicationCommand) -> &'a mut CreateApplicationCommand {
-        let info = self.get_command_info();
-        builder.name(info.name).description(info.description).create_option(|o| {
-            for option in info.options {
-                o.name(option.name).description(option.description).kind(option.option_type.into()).required(option.required);
-            }
-            o
-        })
-    }
-
     fn get_command_info(&self) -> qg_shared::CommandInfo {
         qg_shared::CommandInfo {
             name: String::from("ultimatetictactoe"),
@@ -54,15 +30,16 @@ impl qg_shared::Command for UltimateTicTacToe {
         }
     }
 
-    async fn application_command(&mut self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
+    async fn application_command(&mut self, ctx: &Context, interaction: &mut CommandInteraction, _: &mut qg_shared::OptTrans<'_>) -> Result<()> {
         let mut players = vec![Player {
             id: interaction.user.id,
             piece: Space::X,
         }];
         let other;
         players.push({
-            match interaction.data.options.first().ok_or(qg_shared::anyhow::anyhow!("No opponent specified"))?.resolved.as_ref() {
-                Some(CommandDataOptionValue::User(user, _m)) => {
+            match interaction.data.options.first().ok_or(qg_shared::anyhow::anyhow!("No opponent specified"))?.value {
+                CommandDataOptionValue::User(user) => {
+                    let user = user.to_user(&ctx.http).await?;
                     if user.bot {
                         return Err(qg_shared::anyhow::anyhow!("You cannot play against a bot"));
                     }
@@ -70,7 +47,9 @@ impl qg_shared::Command for UltimateTicTacToe {
                     other = user.clone();
                     Player { id: other.id, piece: Space::O }
                 }
-                _ => return Err(qg_shared::anyhow::anyhow!("No opponent specified")),
+                _ => {
+                    return Err(qg_shared::anyhow::anyhow!("Invalid opponent"));
+                }
             }
         });
         if !std::env::var("ALLOW_SELF_PLAY").ok().and_then(|s| s.parse::<bool>().ok()).unwrap_or(false) {
@@ -99,7 +78,7 @@ impl qg_shared::Command for UltimateTicTacToe {
         Ok(())
     }
 
-    async fn message_component(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
+    async fn message_component(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, _: &mut qg_shared::OptTrans<'_>) -> Result<()> {
         let action = match Action::from_custom_id(&interaction.data.custom_id) {
             Some(action) => action,
             None => return Err(qg_shared::anyhow::anyhow!("Invalid action id")),
@@ -176,7 +155,7 @@ pub struct Game {
 }
 
 impl Game {
-    pub async fn do_action(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction, action: Action) -> Result<()> {
+    pub async fn do_action(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, action: Action) -> Result<()> {
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 if interaction.user.id != u.invitee {
@@ -186,8 +165,8 @@ impl Game {
                     Action::Accept => {
                         self.gamestate = State::InProgress(InProgress::new());
 
-                        let pid = self.players.current().ok_or(anyhow!("Player not found"))?.id.0;
-                        if pid != interaction.user.id.0 {
+                        let pid = self.players.current().ok_or(anyhow!("Player not found"))?.id;
+                        if pid != interaction.user.id {
                             let now = qg_shared::current_time()?;
 
                             if now.saturating_sub(self.last_time) > 0 {
@@ -204,7 +183,7 @@ impl Game {
                                         log::error!("Error creating dm channel: {}", e);
                                         e
                                     })?
-                                    .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
+                                    .send_message(&ctx.http, CreateMessage::default().content(format!("It is your turn in {}", interaction.message.link())))
                                     .await
                                     .map_err(|e| {
                                         log::error!("Error sending message to user: {}", e);
@@ -238,7 +217,7 @@ impl Game {
                         if let Some(winner) = game.board.check_winner(&self.players) {
                             for player in self.players.all() {
                                 ctx.http
-                                    .get_user(player.id.0)
+                                    .get_user(player.id)
                                     .await
                                     .map_err(|e| {
                                         log::error!("Error getting user: {}", e);
@@ -250,15 +229,16 @@ impl Game {
                                         log::error!("Error creating dm channel: {}", e);
                                         e
                                     })?
-                                    .send_message(&ctx.http, |m| {
-                                        m.content({
+                                    .send_message(
+                                        &ctx.http,
+                                        CreateMessage::default().content({
                                             if let Outcome::Win(p) = winner {
                                                 format!("You {} in {}", if *player == p { "won" } else { "got your ass handed to you" }, interaction.message.link())
                                             } else {
                                                 format!("You tied in {}", interaction.message.link())
                                             }
-                                        })
-                                    })
+                                        }),
+                                    )
                                     .await
                                     .map_err(|e| {
                                         log::error!("Error sending message to user: {}", e);
@@ -273,7 +253,7 @@ impl Game {
                             let now = qg_shared::current_time()?;
                             if now.saturating_sub(self.last_time) > 60 {
                                 ctx.http
-                                    .get_user(self.players.current().ok_or(anyhow!("Player not found"))?.id.0)
+                                    .get_user(self.players.current().ok_or(anyhow!("Player not found"))?.id)
                                     .await
                                     .map_err(|e| {
                                         log::error!("Error getting user: {}", e);
@@ -285,7 +265,7 @@ impl Game {
                                         log::error!("Error creating dm channel: {}", e);
                                         e
                                     })?
-                                    .send_message(&ctx.http, |m| m.content(format!("It is your turn in {}", interaction.message.link())))
+                                    .send_message(&ctx.http, CreateMessage::default().content(format!("It is your turn in {}", interaction.message.link())))
                                     .await
                                     .map_err(|e| {
                                         log::error!("Error sending message to user: {}", e);
@@ -310,16 +290,12 @@ impl Game {
         Ok(())
     }
 
-    async fn render(&self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
+    async fn render(&self, ctx: &Context, interaction: &mut ComponentInteraction) -> Result<()> {
         match &self.gamestate {
             State::Cancelled(reason) => {
+                interaction.defer(&ctx.http).await?;
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                    })
-                    .await?;
-                interaction
-                    .edit_original_interaction_response(&ctx.http, |m| m.content(format!("Game cancelled: {}", reason)).components(|f| f))
+                    .edit_response(&ctx.http, EditInteractionResponse::default().content(format!("Game cancelled: {}", reason)).components(vec![]))
                     .await
                     .map_err(|e| {
                         log::error!("Error editing interaction response: {}", e);
@@ -332,12 +308,13 @@ impl Game {
                 content.push_str(u.challenge_message().as_str());
 
                 interaction
-                    .edit_original_interaction_response(&ctx.http, |d| {
-                        d.content(content).components(|c| {
-                            c.create_action_row(|a| {
-                                a.create_button(|b| b.style(ButtonStyle::Success).label("Accept").custom_id(Action::Accept.to_custom_id("ultimatetictactoe")))
-                                    .create_button(|b| b.style(ButtonStyle::Danger).label("Decline").custom_id(Action::Decline.to_custom_id("ultimatetictactoe")))
-                            })
+                    .edit_response(&ctx.http, {
+                        EditInteractionResponse::default().content(content).components({
+                            let rows = vec![CreateActionRow::Buttons(vec![
+                                CreateButton::new(Action::Accept.to_custom_id("ultimatetictactoe")).style(ButtonStyle::Success).label("Accept"),
+                                CreateButton::new(Action::Decline.to_custom_id("ultimatetictactoe")).style(ButtonStyle::Danger).label("Decline"),
+                            ])];
+                            rows
                         })
                     })
                     .await
@@ -357,29 +334,37 @@ impl Game {
 
                 content.push_str(&game.board.string_map());
 
-                interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                    })
-                    .await?;
+                interaction.defer(&ctx.http).await?;
 
                 interaction
                     // .message
-                    .edit_original_interaction_response(&ctx.http, |d| {
-                        d.content(content).components(|c| {
+                    .edit_response(&ctx.http, {
+                        EditInteractionResponse::default().content(content).components({
+                            let mut rows = vec![];
                             for x in 0..=2 {
-                                c.create_action_row(|a| {
-                                    for y in 0..=2 {
-                                        a.create_button(|b| {
-                                            game.board.button_for(x, y, b);
-                                            b
-                                        });
-                                    }
-                                    a
-                                });
+                                let mut buttons = vec![];
+                                for y in 0..=2 {
+                                    buttons.push(game.board.button_for(x, y));
+                                }
+                                rows.push(CreateActionRow::Buttons(buttons));
                             }
-                            c
+                            rows
                         })
+
+                        // d.content(content).components(|c| {
+                        //     for x in 0..=2 {
+                        //         c.create_action_row(|a| {
+                        //             for y in 0..=2 {
+                        //                 a.create_button(|b| {
+                        //                     game.board.button_for(x, y, b);
+                        //                     b
+                        //                 });
+                        //             }
+                        //             a
+                        //         });
+                        //     }
+                        //     c
+                        // })
                     })
                     .await
                     .map_err(|e| {
@@ -393,14 +378,11 @@ impl Game {
 
                 content.push_str(&won_game.board.raw_string_map());
 
+                interaction.defer(&ctx.http).await?;
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                    })
-                    .await?;
-                interaction
-                    .edit_original_interaction_response(&ctx.http, |d| {
-                        d.content(content).components(|c| {
+                    .edit_response(&ctx.http, {
+                        EditInteractionResponse::default().content(content).components({
+                            vec![]
                             // for x in 0..=2 {
                             //     c.create_action_row(|a| {
                             //         for y in 0..=2 {
@@ -413,7 +395,7 @@ impl Game {
                             //         a
                             //     });
                             // }
-                            c
+                            // c
                         })
                     })
                     .await?;
@@ -421,21 +403,26 @@ impl Game {
         }
         Ok(())
     }
-    async fn send(&self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
+    async fn send(&self, ctx: &Context, interaction: &mut CommandInteraction) -> Result<()> {
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
                 content.push_str(u.challenge_message().as_str());
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.interaction_response_data(|d| {
-                            d.content(content).components(|c| {
-                                c.create_action_row(|a| {
-                                    a.create_button(|b| b.style(ButtonStyle::Success).label("Accept").custom_id(Action::Accept.to_custom_id("ultimatetictactoe")))
-                                        .create_button(|b| b.style(ButtonStyle::Danger).label("Decline").custom_id(Action::Decline.to_custom_id("ultimatetictactoe")))
-                                })
-                            })
-                        })
+                    .create_response(&ctx.http, {
+                        CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(content).components({
+                            let rows = vec![CreateActionRow::Buttons(vec![
+                                CreateButton::new(Action::Accept.to_custom_id("ultimatetictactoe")).style(ButtonStyle::Success).label("Accept"),
+                                CreateButton::new(Action::Decline.to_custom_id("ultimatetictactoe")).style(ButtonStyle::Danger).label("Decline"),
+                            ])];
+
+                            rows
+
+                            // c.create_action_row(|a| {
+                            //     a.create_button(|b| b.style(ButtonStyle::Success).label("Accept").custom_id(Action::Accept.to_custom_id("ultimatetictactoe")))
+                            //         .create_button(|b| b.style(ButtonStyle::Danger).label("Decline").custom_id(Action::Decline.to_custom_id("ultimatetictactoe")))
+                            // })
+                        }))
                     })
                     .await?;
             }
@@ -731,23 +718,25 @@ impl MetaBoard {
         })
     }
 
-    fn button_for(&self, x: usize, y: usize, button: &mut qg_shared::serenity::builder::CreateButton) {
+    fn button_for(&self, x: usize, y: usize) -> CreateButton {
         // this depends on whether or not a board is selected
+        let mut button = CreateButton::new(Action::Place(x, y).to_custom_id("ultimatetictactoe"));
         match self.selected {
             None => {
                 // the button is the space of the board at x, y for metaboard
                 let p = self.spaces[x][y].ignore_board();
-                button.label(format!("{}", p)).custom_id(Action::Place(x, y).to_custom_id("ultimatetictactoe"));
+                button = button.label(format!("{}", p));
                 if p != Space::Empty {
-                    button.disabled(true);
+                    button = button.disabled(true);
                 }
-                button.style(p.button_style());
+                button = button.style(p.button_style());
             }
             Some((bx, by)) => {
-                self.spaces[bx][by].ignore_space().button_for(x, y, button, bx, by);
+                button = self.spaces[bx][by].ignore_space().button_for(x, y, button, bx, by);
                 // println!("bx: {} by:{} x:{} y:{}", bx, by, x, y);
             }
         }
+        button
     }
 
     fn string_map(&self) -> String {
@@ -929,17 +918,18 @@ pub struct Board {
 }
 
 impl Board {
-    pub fn button_for(&self, x: usize, y: usize, button: &mut qg_shared::serenity::builder::CreateButton, thisboardx: usize, thisboardy: usize) {
+    pub fn button_for(&self, x: usize, y: usize, mut button: CreateButton, thisboardx: usize, thisboardy: usize) -> CreateButton {
         let p = self.spaces[x][y];
-        button.label(format!("{}", p)).custom_id(Action::Place(x, y).to_custom_id("ultimatetictactoe"));
+        button = button.label(format!("{}", p)).custom_id(Action::Place(x, y).to_custom_id("ultimatetictactoe"));
         if p != Space::Empty {
-            button.disabled(true);
+            button = button.disabled(true);
         }
         if x == thisboardx && y == thisboardy {
-            button.style(ButtonStyle::Success);
+            button = button.style(ButtonStyle::Success);
         } else {
-            button.style(p.button_style());
+            button = button.style(p.button_style());
         }
+        button
     }
 
     fn check_winner(&self, players: &CycleVec<Player>) -> Option<Outcome> {

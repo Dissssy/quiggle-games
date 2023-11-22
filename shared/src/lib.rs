@@ -3,13 +3,7 @@
 use base64::Engine;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use serenity::{
-    builder::CreateApplicationCommand,
-    client::Context,
-    model::application::interaction::{
-        application_command::ApplicationCommandInteraction, autocomplete::AutocompleteInteraction, message_component::MessageComponentInteraction, modal::ModalSubmitInteraction,
-    },
-};
+use serenity::all::*;
 
 pub use anyhow;
 pub use async_trait::async_trait;
@@ -17,6 +11,11 @@ pub use colored;
 pub use log;
 pub use rand;
 pub use serenity;
+pub use sqlx;
+
+pub mod db;
+
+pub type OptTrans<'a> = Option<sqlx::Transaction<'a, sqlx::Postgres>>;
 
 use colored::*;
 
@@ -30,50 +29,71 @@ where
     fn get_name(&self) -> String {
         self.get_command_info().name
     }
-    fn register<'a>(&self, builder: &'a mut CreateApplicationCommand) -> &'a mut CreateApplicationCommand;
+    fn register(&self) -> CreateCommand {
+        let info = self.get_command_info();
+        let mut b = CreateCommand::new(info.name);
+        b = b.description(info.description);
+        for option in info.options {
+            b = b.add_option(CreateCommandOption::new(option.option_type.into(), option.name, option.description).required(option.required));
+        }
+        b
+    }
     fn get_command_info(&self) -> CommandInfo;
-    async fn application_command(&mut self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
+    #[allow(unused_variables)]
+    async fn application_command(&mut self, ctx: &Context, interaction: &mut CommandInteraction, transaction: &mut OptTrans<'_>) -> Result<()> {
         log::error!("Interaction handler not implemented for {}", self.get_name().blue());
+
         if let Err(e) = interaction
-            .create_interaction_response(&ctx.http, |f| {
-                f.interaction_response_data(|d| d.content(format!("Interaction handler not implemented for `{}`", self.get_name())).ephemeral(true))
-            })
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(format!("Command handler not implemented for `{}`", self.get_name())),
+                ),
+            )
             .await
         {
             log::error!("Error creating interaction response: {}", e);
         }
         Ok(())
     }
-    async fn message_component(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
+    #[allow(unused_variables)]
+    async fn message_component(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, transaction: &mut OptTrans<'_>) -> Result<()> {
         log::error!("Message component handler not implemented for {}", self.get_name().blue());
         if let Err(e) = interaction
-            .create_interaction_response(&ctx.http, |f| {
-                f.interaction_response_data(|d| d.content(format!("Message component handler not implemented for `{}`", self.get_name())).ephemeral(true))
-            })
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(format!("Message component handler not implemented for `{}`", self.get_name()))),
+            )
             .await
         {
             log::error!("Error creating interaction response: {}", e);
         }
         Ok(())
     }
-    async fn autocomplete(&mut self, ctx: &Context, interaction: &mut AutocompleteInteraction) -> Result<()> {
+    #[allow(unused_variables)]
+    async fn autocomplete(&mut self, ctx: &Context, interaction: &mut CommandInteraction, transaction: &mut OptTrans<'_>) -> Result<()> {
         log::error!("Autocomplete handler not implemented for {}", self.get_name().blue());
         if let Err(e) = interaction
-            .create_autocomplete_response(&ctx.http, |f| {
-                f.add_string_choice(format!("Autocomplete handler not implemented for `{}`", self.get_name()), "epicfail")
-            })
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Autocomplete(CreateAutocompleteResponse::new().add_string_choice(format!("Autocomplete handler not implemented for `{}`", self.get_name()), "epicfail")),
+            )
             .await
         {
             log::error!("Error creating interaction response: {}", e);
         }
         Ok(())
     }
-    async fn modal_submit(&mut self, ctx: &Context, interaction: &mut ModalSubmitInteraction) -> Result<()> {
+    #[allow(unused_variables)]
+    async fn modal_submit(&mut self, ctx: &Context, interaction: &mut ModalInteraction, transaction: &mut OptTrans<'_>) -> Result<()> {
         log::error!("Modal submit handler not implemented for {}", self.get_name().blue());
         if let Err(e) = interaction
-            .create_interaction_response(&ctx.http, |f| {
-                f.interaction_response_data(|d| d.content(format!("Modal submit handler not implemented for `{}`", self.get_name())).ephemeral(true))
-            })
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(format!("Modal submit handler not implemented for `{}`", self.get_name()))),
+            )
             .await
         {
             log::error!("Error creating interaction response: {}", e);
@@ -89,8 +109,8 @@ pub struct CommandInfo {
     pub options: UnorderedVec<CommandOption>,
 }
 
-impl From<serenity::model::application::command::Command> for CommandInfo {
-    fn from(command: serenity::model::application::command::Command) -> Self {
+impl From<serenity::model::application::Command> for CommandInfo {
+    fn from(command: serenity::model::application::Command) -> Self {
         Self {
             name: command.name,
             description: command.description,
@@ -125,8 +145,8 @@ pub struct CommandOption {
     pub required: bool,
 }
 
-impl From<serenity::model::application::command::CommandOption> for CommandOption {
-    fn from(option: serenity::model::application::command::CommandOption) -> Self {
+impl From<serenity::model::application::CommandOption> for CommandOption {
+    fn from(option: serenity::model::application::CommandOption) -> Self {
         Self {
             name: option.name,
             description: option.description,
@@ -148,45 +168,45 @@ pub enum CommandOptionType {
     String,
     SubCommand,
     SubCommandGroup,
-    Unknown,
+    Unknown(Option<u8>),
     User,
 }
 
-impl From<serenity::model::application::command::CommandOptionType> for CommandOptionType {
-    fn from(option_type: serenity::model::application::command::CommandOptionType) -> Self {
+impl From<serenity::model::application::CommandOptionType> for CommandOptionType {
+    fn from(option_type: serenity::model::application::CommandOptionType) -> Self {
         match option_type {
-            serenity::model::application::command::CommandOptionType::Attachment => Self::Attachment,
-            serenity::model::application::command::CommandOptionType::Boolean => Self::Boolean,
-            serenity::model::application::command::CommandOptionType::Channel => Self::Channel,
-            serenity::model::application::command::CommandOptionType::Integer => Self::Integer,
-            serenity::model::application::command::CommandOptionType::Mentionable => Self::Mentionable,
-            serenity::model::application::command::CommandOptionType::Number => Self::Number,
-            serenity::model::application::command::CommandOptionType::Role => Self::Role,
-            serenity::model::application::command::CommandOptionType::String => Self::String,
-            serenity::model::application::command::CommandOptionType::SubCommand => Self::SubCommand,
-            serenity::model::application::command::CommandOptionType::SubCommandGroup => Self::SubCommandGroup,
-            serenity::model::application::command::CommandOptionType::Unknown => Self::Unknown,
-            serenity::model::application::command::CommandOptionType::User => Self::User,
-            _ => Self::Unknown,
+            serenity::model::application::CommandOptionType::Attachment => Self::Attachment,
+            serenity::model::application::CommandOptionType::Boolean => Self::Boolean,
+            serenity::model::application::CommandOptionType::Channel => Self::Channel,
+            serenity::model::application::CommandOptionType::Integer => Self::Integer,
+            serenity::model::application::CommandOptionType::Mentionable => Self::Mentionable,
+            serenity::model::application::CommandOptionType::Number => Self::Number,
+            serenity::model::application::CommandOptionType::Role => Self::Role,
+            serenity::model::application::CommandOptionType::String => Self::String,
+            serenity::model::application::CommandOptionType::SubCommand => Self::SubCommand,
+            serenity::model::application::CommandOptionType::SubCommandGroup => Self::SubCommandGroup,
+            serenity::model::application::CommandOptionType::Unknown(i) => Self::Unknown(Some(i)),
+            serenity::model::application::CommandOptionType::User => Self::User,
+            _ => Self::Unknown(None),
         }
     }
 }
 
-impl From<CommandOptionType> for serenity::model::application::command::CommandOptionType {
+impl From<CommandOptionType> for serenity::model::application::CommandOptionType {
     fn from(val: CommandOptionType) -> Self {
         match val {
-            CommandOptionType::Attachment => serenity::model::application::command::CommandOptionType::Attachment,
-            CommandOptionType::Boolean => serenity::model::application::command::CommandOptionType::Boolean,
-            CommandOptionType::Channel => serenity::model::application::command::CommandOptionType::Channel,
-            CommandOptionType::Integer => serenity::model::application::command::CommandOptionType::Integer,
-            CommandOptionType::Mentionable => serenity::model::application::command::CommandOptionType::Mentionable,
-            CommandOptionType::Number => serenity::model::application::command::CommandOptionType::Number,
-            CommandOptionType::Role => serenity::model::application::command::CommandOptionType::Role,
-            CommandOptionType::String => serenity::model::application::command::CommandOptionType::String,
-            CommandOptionType::SubCommand => serenity::model::application::command::CommandOptionType::SubCommand,
-            CommandOptionType::SubCommandGroup => serenity::model::application::command::CommandOptionType::SubCommandGroup,
-            CommandOptionType::Unknown => serenity::model::application::command::CommandOptionType::Unknown,
-            CommandOptionType::User => serenity::model::application::command::CommandOptionType::User,
+            CommandOptionType::Attachment => serenity::model::application::CommandOptionType::Attachment,
+            CommandOptionType::Boolean => serenity::model::application::CommandOptionType::Boolean,
+            CommandOptionType::Channel => serenity::model::application::CommandOptionType::Channel,
+            CommandOptionType::Integer => serenity::model::application::CommandOptionType::Integer,
+            CommandOptionType::Mentionable => serenity::model::application::CommandOptionType::Mentionable,
+            CommandOptionType::Number => serenity::model::application::CommandOptionType::Number,
+            CommandOptionType::Role => serenity::model::application::CommandOptionType::Role,
+            CommandOptionType::String => serenity::model::application::CommandOptionType::String,
+            CommandOptionType::SubCommand => serenity::model::application::CommandOptionType::SubCommand,
+            CommandOptionType::SubCommandGroup => serenity::model::application::CommandOptionType::SubCommandGroup,
+            CommandOptionType::Unknown(i) => serenity::model::application::CommandOptionType::Unknown(i.unwrap_or(0)),
+            CommandOptionType::User => serenity::model::application::CommandOptionType::User,
         }
     }
 }

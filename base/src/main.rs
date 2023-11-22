@@ -1,10 +1,25 @@
 use qg_shared::anyhow::anyhow;
+mod custom_serenity;
+use custom_serenity as shuttle_serenity;
 use serenity::{model::gateway::GatewayIntents, Client};
 
 mod handler;
 
+#[allow(unused_variables)]
 #[shuttle_runtime::main]
-async fn serenity(#[shuttle_secrets::Secrets] secret_store: shuttle_secrets::SecretStore) -> shuttle_serenity::ShuttleSerenity {
+async fn serenity(
+    #[shuttle_secrets::Secrets] secret_store: shuttle_secrets::SecretStore,
+    #[shuttle_shared_db::Postgres(
+        local_uri = &std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
+    )]
+    db: sqlx::PgPool,
+) -> shuttle_serenity::ShuttleSerenity {
+    #[cfg(feature = "leaderboard")]
+    {
+        // if leaderboard is enabled, we need to make sure the database is set up
+        sqlx::migrate!("../migrations").run(&db).await.map_err(|e| anyhow!(e))?;
+    }
+
     let token = match secret_store.get("DISCORD_TOKEN") {
         Some(token) => token,
         None => {
@@ -23,7 +38,16 @@ async fn serenity(#[shuttle_secrets::Secrets] secret_store: shuttle_secrets::Sec
     // replace with actually necessary intents eventually lol
     let intents = GatewayIntents::non_privileged();
 
-    let handler = handler::Handler::new(dev_server);
+    let handler = {
+        #[cfg(feature = "leaderboard")]
+        {
+            handler::Handler::new(dev_server, db)
+        }
+        #[cfg(not(feature = "leaderboard"))]
+        {
+            handler::Handler::new(dev_server)
+        }
+    };
 
     let client = Client::builder(&token, intents).event_handler(handler).await.map_err(|e| anyhow!(e))?;
 

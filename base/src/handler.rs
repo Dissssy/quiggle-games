@@ -5,23 +5,21 @@ use qg_shared::{
     colored::*,
     log,
 };
-use serenity::{
-    client::Context,
-    client::EventHandler,
-    futures::lock::Mutex,
-    model::application::interaction::Interaction,
-    model::id::{CommandId, GuildId},
-};
+use serenity::{all::*, futures::lock::Mutex};
 use std::{collections::HashMap, sync::Arc};
 
 pub struct Handler {
     commands: Arc<Mutex<CommandHolder>>,
+    #[cfg(feature = "leaderboard")]
+    pool: sqlx::PgPool,
 }
 
 impl Handler {
-    pub fn new(dev_server: Option<GuildId>) -> Self {
+    pub fn new(dev_server: Option<GuildId>, #[cfg(feature = "leaderboard")] pool: sqlx::PgPool) -> Self {
         Self {
             commands: Arc::new(Mutex::new(CommandHolder::new(dev_server))),
+            #[cfg(feature = "leaderboard")]
+            pool,
         }
     }
     pub async fn register_commands(&self, http: &Arc<serenity::http::Http>) -> Result<()> {
@@ -39,7 +37,6 @@ impl Handler {
 #[qg_shared::async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: serenity::client::Context, ready: serenity::model::gateway::Ready) {
-        // eventually we will want to register all of our commands here
         if let Err(e) = self.register_commands(&ctx.http).await {
             log::error!("Error registering commands: {}", e);
         }
@@ -50,29 +47,66 @@ impl EventHandler for Handler {
             Interaction::Ping(p) => {
                 log::info!("Ping interaction {}", format!("{:?}", p).blue());
             }
-            Interaction::ApplicationCommand(mut cmd) => {
+            Interaction::Command(mut cmd) => {
                 let name = cmd.data.name.clone();
                 if let Some(command) = {
                     let commands = self.commands.lock().await;
                     commands.find(|c| c == name)
                 } {
-                    if let Err(e) = command.lock().await.application_command(&ctx, &mut cmd).await {
+                    let mut tx = {
+                        #[cfg(feature = "leaderboard")]
+                        match self.pool.begin().await {
+                            Ok(tx) => Some(tx),
+                            Err(e) => {
+                                log::error!("Error creating transaction: {}", e);
+                                None
+                            }
+                        }
+                        #[cfg(not(feature = "leaderboard"))]
+                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                    };
+                    if let Err(e) = command.lock().await.application_command(&ctx, &mut cmd, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = cmd.create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(e).ephemeral(true))).await {
+                        if let Err(e) = cmd
+                            .create_response(&ctx.http, {
+                                CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(e.to_string()).ephemeral(true))
+                                // f.interaction_response_data(|d| d.content(e).ephemeral(true))
+                            })
+                            .await
+                        {
                             log::error!("Error creating interaction response: {}", e);
+                        }
+                        // abort the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.rollback().await {
+                                log::error!("Error rolling back transaction: {}", e);
+                            }
+                        }
+                    } else {
+                        log::trace!("Handled interaction for command {}", name.blue());
+                        // complete the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.commit().await {
+                                log::error!("Error committing transaction: {}", e);
+                            }
                         }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
                     if let Err(e) = cmd
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true)))
+                        .create_response(&ctx.http, {
+                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(format!("Command `{}` not found", name)).ephemeral(true))
+                            // f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true))})
+                        })
                         .await
                     {
                         log::error!("Error creating interaction response: {}", e);
                     }
                 }
             }
-            Interaction::MessageComponent(mut cmp) => {
+            Interaction::Component(mut cmp) => {
                 log::trace!("Message component interaction {}", format!("{:?}", cmp).blue());
                 let name = cmp.data.custom_id.clone();
                 log::trace!("Message component interaction {}", name.blue());
@@ -84,24 +118,56 @@ impl EventHandler for Handler {
                 } {
                     let mut cmd = command.lock().await;
                     log::trace!("found command: {}", cmd.get_name().blue());
-                    if let Err(e) = cmd.message_component(&ctx, &mut cmp).await {
+                    let mut tx = {
+                        #[cfg(feature = "leaderboard")]
+                        match self.pool.begin().await {
+                            Ok(tx) => Some(tx),
+                            Err(e) => {
+                                log::error!("Error creating transaction: {}", e);
+                                None
+                            }
+                        }
+                        #[cfg(not(feature = "leaderboard"))]
+                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                    };
+                    if let Err(e) = cmd.message_component(&ctx, &mut cmp, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = cmp.create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(e).ephemeral(true))).await {
+                        if let Err(e) = cmp
+                            .create_response(&ctx.http, {
+                                CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(e.to_string()).ephemeral(true))
+                                // f.interaction_response_data(|d| d.content(e).ephemeral(true))
+                            })
+                            .await
+                        {
                             log::error!("Error creating interaction response: {}", e);
+                        }
+                        // abort the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.rollback().await {
+                                log::error!("Error rolling back transaction: {}", e);
+                            }
                         }
                     } else {
                         log::trace!("Handled interaction for command {}", name.blue());
-                        if let Err(e) = cmp
-                            .create_interaction_response(&ctx.http, |f| f.kind(serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage))
-                            .await
-                        {
+                        if let Err(e) = cmp.defer(&ctx.http).await {
                             log::trace!("Error creating interaction response: {}", e);
+                        }
+                        // complete the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.commit().await {
+                                log::error!("Error committing transaction: {}", e);
+                            }
                         }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
                     if let Err(e) = cmp
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true)))
+                        .create_response(&ctx.http, {
+                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(format!("Command `{}` not found", name)).ephemeral(true))
+                            // f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true))
+                        })
                         .await
                     {
                         log::error!("Error creating interaction response: {}", e);
@@ -115,45 +181,120 @@ impl EventHandler for Handler {
                     let commands = self.commands.lock().await;
                     commands.find(|c| c == name)
                 } {
-                    if let Err(e) = command.lock().await.autocomplete(&ctx, &mut act).await {
+                    let mut tx = {
+                        #[cfg(feature = "leaderboard")]
+                        match self.pool.begin().await {
+                            Ok(tx) => Some(tx),
+                            Err(e) => {
+                                log::error!("Error creating transaction: {}", e);
+                                None
+                            }
+                        }
+                        #[cfg(not(feature = "leaderboard"))]
+                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                    };
+                    if let Err(e) = command.lock().await.autocomplete(&ctx, &mut act, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = act.create_autocomplete_response(&ctx.http, |f| f.add_string_choice(e, "epicfail")).await {
+                        if let Err(e) = act
+                            .create_response(&ctx.http, {
+                                CreateInteractionResponse::Autocomplete(CreateAutocompleteResponse::new().add_string_choice(e.to_string(), "epicfail"))
+                                // f.add_string_choice(e, "epicfail")
+                            })
+                            .await
+                        {
                             log::error!("Error creating interaction response: {}", e);
+                        }
+                        // abort the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.rollback().await {
+                                log::error!("Error rolling back transaction: {}", e);
+                            }
+                        }
+                    } else {
+                        log::trace!("Handled interaction for command {}", name.blue());
+                        // complete the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.commit().await {
+                                log::error!("Error committing transaction: {}", e);
+                            }
                         }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
                     if let Err(e) = act
-                        .create_autocomplete_response(&ctx.http, |f| f.add_string_choice(format!("Command {} not found", name), "epicfail"))
+                        .create_response(
+                            &ctx.http,
+                            CreateInteractionResponse::Autocomplete(CreateAutocompleteResponse::new().add_string_choice(format!("Command {} not found", name), "epicfail")),
+                        )
                         .await
                     {
                         log::error!("Error creating interaction response: {}", e);
                     }
                 }
             }
-            Interaction::ModalSubmit(mut mdl) => {
+            Interaction::Modal(mut mdl) => {
                 log::info!("Modal submit interaction {}", format!("{:?}", mdl).blue());
                 let name = mdl.data.custom_id.clone();
                 if let Some(command) = {
                     let commands = self.commands.lock().await;
                     commands.find(|c| name.starts_with(c))
                 } {
-                    if let Err(e) = command.lock().await.modal_submit(&ctx, &mut mdl).await {
+                    let mut tx = {
+                        #[cfg(feature = "leaderboard")]
+                        match self.pool.begin().await {
+                            Ok(tx) => Some(tx),
+                            Err(e) => {
+                                log::error!("Error creating transaction: {}", e);
+                                None
+                            }
+                        }
+                        #[cfg(not(feature = "leaderboard"))]
+                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                    };
+                    if let Err(e) = command.lock().await.modal_submit(&ctx, &mut mdl, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = mdl.create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(e).ephemeral(true))).await {
+                        if let Err(e) = mdl
+                            .create_response(
+                                &ctx.http,
+                                CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(e.to_string()).ephemeral(true)),
+                            )
+                            .await
+                        {
                             log::error!("Error creating interaction response: {}", e);
+                        }
+                        // abort the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.rollback().await {
+                                log::error!("Error rolling back transaction: {}", e);
+                            }
+                        }
+                    } else {
+                        log::trace!("Handled interaction for command {}", name.blue());
+                        // complete the transaction if it exists
+                        #[cfg(feature = "leaderboard")]
+                        if let Some(tx) = tx {
+                            if let Err(e) = tx.commit().await {
+                                log::error!("Error committing transaction: {}", e);
+                            }
                         }
                     }
                 } else {
                     log::warn!("Command {} not found", name.red());
                     if let Err(e) = mdl
-                        .create_interaction_response(&ctx.http, |f| f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true)))
+                        .create_response(&ctx.http, {
+                            // f.interaction_response_data(|d| d.content(format!("Command `{}` not found", name)).ephemeral(true))
+                            CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(format!("Command `{}` not found", name)).ephemeral(true))
+                        })
                         .await
                     {
                         log::error!("Error creating interaction response: {}", e);
                     }
                 }
             }
+            _ => {}
         }
     }
 }
@@ -205,11 +346,12 @@ impl CommandHolder {
                 // since the command is NOT registered OR the command info is different, register the command
                 if let Some(dev_server) = self.dev_server {
                     log::info!("Registering command {} to {}", command_info.name.blue(), "DEV SERVER".red().bold());
-                    let guild = http.get_guild(dev_server.0).await?;
-                    guild.create_application_command(http, |b| command.register(b)).await?;
+                    let guild = http.get_guild(dev_server).await?;
+                    guild.create_command(http, command.register()).await?;
                 } else {
                     log::info!("Registering command {} {}", command_info.name.blue(), "GLOBALLY".green().bold());
-                    serenity::model::application::command::Command::create_global_application_command(http, |b| command.register(b)).await?;
+                    // http.create_global_command(command.register()).await?;
+                    serenity::model::application::Command::create_global_command(http, command.register()).await?;
                 }
             }
             name
@@ -225,9 +367,9 @@ impl CommandHolder {
         self.cached_commands = Some(match self.dev_server {
             Some(dev_server) => {
                 log::info!("Caching dev commands");
-                http.get_guild(dev_server.0)
+                http.get_guild(dev_server)
                     .await?
-                    .get_application_commands(http)
+                    .get_commands(http)
                     .await?
                     .into_iter()
                     .map(|command| (command.id, command.into()))
@@ -235,7 +377,7 @@ impl CommandHolder {
             }
             None => {
                 log::info!("Caching global commands");
-                http.get_global_application_commands().await?.into_iter().map(|command| (command.id, command.into())).collect()
+                http.get_global_commands().await?.into_iter().map(|command| (command.id, command.into())).collect()
             }
         });
         Ok(())
@@ -252,7 +394,7 @@ impl CommandHolder {
         };
 
         let dev_guild = match self.dev_server {
-            Some(dev_guild) => Some(http.get_guild(dev_guild.0).await?),
+            Some(dev_guild) => Some(http.get_guild(dev_guild).await?),
             None => None,
         };
 
@@ -261,11 +403,12 @@ impl CommandHolder {
                 match dev_guild.as_ref() {
                     Some(dev_guild) => {
                         log::info!("Unregistering command {} from {}", cached_command.name.blue(), "DEV SERVER".red().bold());
-                        dev_guild.delete_application_command(http, *id).await?;
+                        dev_guild.delete_command(http, *id).await?;
                     }
                     None => {
                         log::info!("Unregistering command {} {}", cached_command.name.blue(), "GLOBALLY".green().bold());
-                        serenity::model::application::command::Command::delete_global_application_command(http, *id).await?;
+                        // serenity::model::application::command::Command::delete_global_application_command(http, *id).await?;
+                        serenity::model::application::Command::delete_global_command(http, *id).await?;
                     }
                 }
             }

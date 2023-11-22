@@ -2,18 +2,7 @@ use qg_shared::{
     anyhow::{anyhow, Result},
     colored::Colorize,
     rand::Rng as _,
-    serenity::{
-        builder::CreateApplicationCommand,
-        client::Context,
-        model::{
-            application::{
-                component::ButtonStyle,
-                interaction::{application_command::ApplicationCommandInteraction, message_component::MessageComponentInteraction},
-            },
-            id::UserId,
-            mention::Mentionable,
-        },
-    },
+    serenity::all::*,
 };
 
 use serde::{Deserialize, Serialize};
@@ -26,10 +15,10 @@ pub struct SlidingPuzzle;
 
 #[qg_shared::async_trait]
 impl qg_shared::Command for SlidingPuzzle {
-    fn register<'a>(&self, builder: &'a mut CreateApplicationCommand) -> &'a mut CreateApplicationCommand {
-        let info = self.get_command_info();
-        builder.name(info.name).description(info.description)
-    }
+    // fn register<'a>(&self, builder: &'a mut CreateApplicationCommand) -> &'a mut CreateApplicationCommand {
+    //     let info = self.get_command_info();
+    //     builder.name(info.name).description(info.description)
+    // }
 
     fn get_command_info(&self) -> qg_shared::CommandInfo {
         qg_shared::CommandInfo {
@@ -39,7 +28,7 @@ impl qg_shared::Command for SlidingPuzzle {
         }
     }
 
-    async fn application_command(&mut self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
+    async fn application_command(&mut self, ctx: &Context, interaction: &mut CommandInteraction, _: &mut qg_shared::OptTrans<'_>) -> Result<()> {
         let game = Game {
             player: Player { id: interaction.user.id },
             gamestate: State::AwaitingApproval(Awaiting { inviter: interaction.user.id }),
@@ -53,7 +42,7 @@ impl qg_shared::Command for SlidingPuzzle {
         Ok(())
     }
 
-    async fn message_component(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction) -> Result<()> {
+    async fn message_component(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, db: &mut qg_shared::OptTrans<'_>) -> Result<()> {
         let action = match Action::from_custom_id(&interaction.data.custom_id) {
             Some(action) => action,
             None => return Err(qg_shared::anyhow::anyhow!("Invalid action id")),
@@ -67,7 +56,7 @@ impl qg_shared::Command for SlidingPuzzle {
             qg_shared::deserialize::<Game>(game)?
         };
 
-        game.do_action(ctx, interaction, action).await?;
+        game.do_action(ctx, interaction, action, db).await?;
 
         Ok(())
     }
@@ -241,7 +230,7 @@ pub struct Game {
 }
 
 impl Game {
-    pub async fn do_action(&mut self, ctx: &Context, interaction: &mut MessageComponentInteraction, action: Action) -> Result<()> {
+    pub async fn do_action(&mut self, ctx: &Context, interaction: &mut ComponentInteraction, action: Action, db: &mut qg_shared::OptTrans<'_>) -> Result<()> {
         let shitstarted = qg_shared::current_time()?;
         let mut updatetime = false;
         match self.gamestate {
@@ -289,6 +278,23 @@ impl Game {
                                 },
                                 board: game.board.clone(),
                             });
+                            match db {
+                                Some(db) => {
+                                    // ensure the user is in the database first
+                                    let user = qg_shared::db::User::get_or_create(ctx, &self.player.id, db).await?;
+                                    // create an entry for the user in the slidingpuzzle table
+                                    qg_shared::db::SlidingPuzzle::create(
+                                        user.id as i32,
+                                        self.difficulty as i32,
+                                        self.size as i32,
+                                        self.moves as i32,
+                                        (qg_shared::current_time()? - self.start_time.unwrap_or(qg_shared::current_time()?)) as i32,
+                                        db,
+                                    )
+                                    .await?;
+                                }
+                                None => {}
+                            }
                         } else {
                             updatetime = true;
                         }
@@ -332,48 +338,71 @@ impl Game {
         Ok(())
     }
 
-    async fn render(&self, ctx: &Context, interaction: &mut MessageComponentInteraction, start_time: Option<u64>) -> Result<()> {
+    async fn render(&self, ctx: &Context, interaction: &mut ComponentInteraction, start_time: Option<u64>) -> Result<()> {
         match &self.gamestate {
             State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
                 content.push_str(u.challenge_message().as_str());
+                interaction.defer(&ctx.http).await?;
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                    })
-                    .await?;
-                interaction
-                    .edit_original_interaction_response(&ctx.http, |d| {
-                        d.content(content).components(|c| {
-                            c.create_action_row(|a| {
-                                // Size Buttons, the selected one is disabled and Primary, the others are Secondary
-                                for size in &[Size::Three, Size::Four, Size::Five] {
-                                    a.create_button(|b| {
-                                        b.style(if *size == self.size { ButtonStyle::Primary } else { ButtonStyle::Secondary })
-                                            .label(size.name())
-                                            .custom_id(Action::SetSize(*size).to_custom_id("slidingpuzzle"))
-                                            .disabled(*size == self.size)
-                                    });
-                                }
-                                a
-                            })
-                            .create_action_row(|a| {
-                                // Difficulty Buttons, the selected one is disabled and depends on the difficulty, the others are Secondary
-                                for difficulty in &[Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
-                                    a.create_button(|b| {
-                                        b.style(if *difficulty == self.difficulty { difficulty.button_style() } else { ButtonStyle::Secondary })
-                                            .label(difficulty.name())
-                                            .custom_id(Action::SetDifficulty(*difficulty).to_custom_id("slidingpuzzle"))
-                                            .disabled(*difficulty == self.difficulty)
-                                    });
-                                }
-                                a
-                            })
-                            .create_action_row(|a| {
-                                // Start Button
-                                a.create_button(|b| b.style(ButtonStyle::Success).label("Start").custom_id(Action::Start.to_custom_id("slidingpuzzle")));
-                                a
-                            })
+                    .edit_response(&ctx.http, {
+                        EditInteractionResponse::default().content(content).components({
+                            vec![
+                                CreateActionRow::Buttons({
+                                    let mut buttons = Vec::new();
+                                    for size in &[Size::Three, Size::Four, Size::Five] {
+                                        buttons.push(
+                                            CreateButton::new(Action::SetSize(*size).to_custom_id("slidingpuzzle"))
+                                                .style(if *size == self.size { ButtonStyle::Primary } else { ButtonStyle::Secondary })
+                                                .label(size.name())
+                                                .disabled(*size == self.size),
+                                        );
+                                    }
+                                    buttons
+                                }),
+                                CreateActionRow::Buttons({
+                                    let mut buttons = Vec::new();
+                                    for difficulty in &[Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
+                                        buttons.push(
+                                            CreateButton::new(Action::SetDifficulty(*difficulty).to_custom_id("slidingpuzzle"))
+                                                .style(if *difficulty == self.difficulty { difficulty.button_style() } else { ButtonStyle::Secondary })
+                                                .label(difficulty.name())
+                                                .disabled(*difficulty == self.difficulty),
+                                        );
+                                    }
+                                    buttons
+                                }),
+                                CreateActionRow::Buttons(vec![CreateButton::new(Action::Start.to_custom_id("slidingpuzzle")).style(ButtonStyle::Success).label("Start")]),
+                            ]
+                            // c.create_action_row(|a| {
+                            //     // Size Buttons, the selected one is disabled and Primary, the others are Secondary
+                            //     for size in &[Size::Three, Size::Four, Size::Five] {
+                            //         a.create_button(|b| {
+                            //             b.style(if *size == self.size { ButtonStyle::Primary } else { ButtonStyle::Secondary })
+                            //                 .label(size.name())
+                            //                 .custom_id(Action::SetSize(*size).to_custom_id("slidingpuzzle"))
+                            //                 .disabled(*size == self.size)
+                            //         });
+                            //     }
+                            //     a
+                            // })
+                            // .create_action_row(|a| {
+                            //     // Difficulty Buttons, the selected one is disabled and depends on the difficulty, the others are Secondary
+                            //     for difficulty in &[Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
+                            //         a.create_button(|b| {
+                            //             b.style(if *difficulty == self.difficulty { difficulty.button_style() } else { ButtonStyle::Secondary })
+                            //                 .label(difficulty.name())
+                            //                 .custom_id(Action::SetDifficulty(*difficulty).to_custom_id("slidingpuzzle"))
+                            //                 .disabled(*difficulty == self.difficulty)
+                            //         });
+                            //     }
+                            //     a
+                            // })
+                            // .create_action_row(|a| {
+                            //     // Start Button
+                            //     a.create_button(|b| b.style(ButtonStyle::Success).label("Start").custom_id(Action::Start.to_custom_id("slidingpuzzle")));
+                            //     a
+                            // })
                         })
                     })
                     .await?;
@@ -391,26 +420,30 @@ impl Game {
                     )
                     .as_str(),
                 );
+                interaction.defer(&ctx.http).await?;
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                    })
-                    .await?;
-                interaction
-                    .edit_original_interaction_response(&ctx.http, |d| {
-                        d.content(content).components(|c| {
+                    .edit_response(&ctx.http, {
+                        EditInteractionResponse::default().content(content).components({
+                            let mut rows = Vec::new();
                             for x in 0..self.size.numeral() {
-                                c.create_action_row(|a| {
+                                rows.push(CreateActionRow::Buttons({
+                                    let mut buttons = Vec::new();
                                     for y in 0..self.size.numeral() {
-                                        a.create_button(|b| {
-                                            game.board.button_for(y, x, b);
-                                            b
-                                        });
+                                        buttons.push(game.board.button_for(y, x));
                                     }
-                                    a
-                                });
+                                    buttons
+                                }))
+                                // c.create_action_row(|a| {
+                                //     for y in 0..self.size.numeral() {
+                                //         a.create_button(|b| {
+                                //             game.board.button_for(y, x, b);
+                                //             b
+                                //         });
+                                //     }
+                                //     a
+                                // });
                             }
-                            c
+                            rows
                         })
                     })
                     .await?;
@@ -428,63 +461,85 @@ impl Game {
                     )
                     .as_str(),
                 );
+                interaction.defer(&ctx.http).await?;
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.kind(qg_shared::serenity::model::application::interaction::InteractionResponseType::DeferredUpdateMessage)
-                    })
-                    .await?;
-                interaction
-                    .edit_original_interaction_response(&ctx.http, |d| {
-                        d.content(content).components(|c| {
-                            // no components, its a sliding puzzle lol.
-                            c
-                        })
+                    .edit_response(&ctx.http, {
+                        EditInteractionResponse::default().content(content).components(vec![])
+                        // d.content(content).components(|c| {
+                        //     // no components, its a sliding puzzle lol.
+                        //     c
+                        // })
                     })
                     .await?;
             }
         }
         Ok(())
     }
-    async fn send(&self, ctx: &Context, interaction: &mut ApplicationCommandInteraction) -> Result<()> {
+    async fn send(&self, ctx: &Context, interaction: &mut CommandInteraction) -> Result<()> {
         match self.gamestate {
             State::AwaitingApproval(ref u) => {
                 let mut content = self.title_card()?;
                 content.push_str(u.challenge_message().as_str());
                 interaction
-                    .create_interaction_response(&ctx.http, |f| {
-                        f.interaction_response_data(|d| {
-                            d.content(content).components(|c| {
-                                c.create_action_row(|a| {
-                                    // Size Buttons, the selected one is disabled and Primary, the others are Secondary
+                    .create_response(&ctx.http, {
+                        CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(content).components({
+                            vec![
+                                CreateActionRow::Buttons({
+                                    let mut buttons = Vec::new();
                                     for size in &[Size::Three, Size::Four, Size::Five] {
-                                        a.create_button(|b| {
-                                            b.style(if *size == self.size { ButtonStyle::Primary } else { ButtonStyle::Secondary })
+                                        buttons.push(
+                                            CreateButton::new(Action::SetSize(*size).to_custom_id("slidingpuzzle"))
+                                                .style(if *size == self.size { ButtonStyle::Primary } else { ButtonStyle::Secondary })
                                                 .label(size.name())
-                                                .custom_id(Action::SetSize(*size).to_custom_id("slidingpuzzle"))
-                                                .disabled(*size == self.size)
-                                        });
+                                                .disabled(*size == self.size),
+                                        );
                                     }
-                                    a
-                                })
-                                .create_action_row(|a| {
-                                    // Difficulty Buttons, the selected one is disabled and depends on which difficulty, the others are Secondary
+                                    buttons
+                                }),
+                                CreateActionRow::Buttons({
+                                    let mut buttons = Vec::new();
                                     for difficulty in &[Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
-                                        a.create_button(|b| {
-                                            b.style(if *difficulty == self.difficulty { difficulty.button_style() } else { ButtonStyle::Secondary })
+                                        buttons.push(
+                                            CreateButton::new(Action::SetDifficulty(*difficulty).to_custom_id("slidingpuzzle"))
+                                                .style(if *difficulty == self.difficulty { difficulty.button_style() } else { ButtonStyle::Secondary })
                                                 .label(difficulty.name())
-                                                .custom_id(Action::SetDifficulty(*difficulty).to_custom_id("slidingpuzzle"))
-                                                .disabled(*difficulty == self.difficulty)
-                                        });
+                                                .disabled(*difficulty == self.difficulty),
+                                        );
                                     }
-                                    a
-                                })
-                                .create_action_row(|a| {
-                                    // Start Button
-                                    a.create_button(|b| b.style(ButtonStyle::Success).label("Start").custom_id(Action::Start.to_custom_id("slidingpuzzle")));
-                                    a
-                                })
-                            })
-                        })
+                                    buttons
+                                }),
+                                CreateActionRow::Buttons(vec![CreateButton::new(Action::Start.to_custom_id("slidingpuzzle")).style(ButtonStyle::Success).label("Start")]),
+                            ]
+                            // c.create_action_row(|a| {
+                            //     // Size Buttons, the selected one is disabled and Primary, the others are Secondary
+                            //     for size in &[Size::Three, Size::Four, Size::Five] {
+                            //         a.create_button(|b| {
+                            //             b.style(if *size == self.size { ButtonStyle::Primary } else { ButtonStyle::Secondary })
+                            //                 .label(size.name())
+                            //                 .custom_id(Action::SetSize(*size).to_custom_id("slidingpuzzle"))
+                            //                 .disabled(*size == self.size)
+                            //         });
+                            //     }
+                            //     a
+                            // })
+                            // .create_action_row(|a| {
+                            //     // Difficulty Buttons, the selected one is disabled and depends on which difficulty, the others are Secondary
+                            //     for difficulty in &[Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
+                            //         a.create_button(|b| {
+                            //             b.style(if *difficulty == self.difficulty { difficulty.button_style() } else { ButtonStyle::Secondary })
+                            //                 .label(difficulty.name())
+                            //                 .custom_id(Action::SetDifficulty(*difficulty).to_custom_id("slidingpuzzle"))
+                            //                 .disabled(*difficulty == self.difficulty)
+                            //         });
+                            //     }
+                            //     a
+                            // })
+                            // .create_action_row(|a| {
+                            //     // Start Button
+                            //     a.create_button(|b| b.style(ButtonStyle::Success).label("Start").custom_id(Action::Start.to_custom_id("slidingpuzzle")));
+                            //     a
+                            // })
+                        }))
                     })
                     .await?;
             }
@@ -695,7 +750,7 @@ impl Board {
         self.spaces.swap(empty_tile, i);
     }
 
-    fn button_for(&self, x: usize, y: usize, b: &mut qg_shared::serenity::builder::CreateButton) {
+    fn button_for(&self, x: usize, y: usize) -> CreateButton {
         // convert x and y to a single index
         let i = x + (y * self.size.numeral());
         let p = self.spaces[i];
@@ -712,23 +767,19 @@ impl Board {
         match (p, direction) {
             // Empty space, disabled, Secondary style
             (Space::Empty, _) => {
-                b.disabled(true)
-                    .style(ButtonStyle::Secondary)
-                    .label(p.button_text(over_nine))
-                    .custom_id(Action::InvalidMove(i).to_custom_id("slidingpuzzle"));
+                let b = CreateButton::new(Action::InvalidMove(i).to_custom_id("slidingpuzzle"));
+                b.disabled(true).style(ButtonStyle::Secondary).label(p.button_text(over_nine))
             }
             // Value space, disabled, Secondary style unless in correct position, then Success style
             (Space::Value(v), None) => {
-                b.style(if v == (i + 1) as u8 { ButtonStyle::Success } else { ButtonStyle::Secondary })
-                    .label(p.button_text(over_nine))
-                    // .disabled(true)
-                    .custom_id(Action::InvalidMove(i).to_custom_id("slidingpuzzle"));
+                let b = CreateButton::new(Action::InvalidMove(i).to_custom_id("slidingpuzzle"));
+                b.style(if v == (i + 1) as u8 { ButtonStyle::Success } else { ButtonStyle::Secondary }).label(p.button_text(over_nine))
+                // .disabled(true)
             }
             // Value space, enabled if adjacent to empty space in a cardinal direction, Primary style unless in correct position, then Success style
             (Space::Value(v), Some(_)) => {
-                b.style(if v == (i + 1) as u8 { ButtonStyle::Success } else { ButtonStyle::Primary })
-                    .label(p.button_text(over_nine))
-                    .custom_id(Action::MoveTile(i, empty_tile_index).to_custom_id("slidingpuzzle"));
+                let b = CreateButton::new(Action::MoveTile(i, empty_tile_index).to_custom_id("slidingpuzzle"));
+                b.style(if v == (i + 1) as u8 { ButtonStyle::Success } else { ButtonStyle::Primary }).label(p.button_text(over_nine))
             }
         }
     }
