@@ -11,6 +11,8 @@ use sqlx::{types::chrono, Acquire};
 
 use crate::anyhow::Result;
 
+use super::User;
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct UltimateTicTacToe {
     id: i64,
@@ -21,9 +23,7 @@ pub struct UltimateTicTacToe {
 }
 
 impl UltimateTicTacToe {
-    pub async fn create(user_id: i32, opponent_id: i32, won: bool, db: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<Self> {
-        let mut tx = db.begin().await?;
-
+    pub async fn create(user_id: i32, opponent_id: i32, won: bool, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<Self> {
         let tictactoe = sqlx::query_as!(
             UltimateTicTacToe,
             r#"
@@ -38,8 +38,61 @@ impl UltimateTicTacToe {
         .fetch_one(tx.acquire().await?)
         .await?;
 
-        tx.commit().await?;
-
         Ok(tictactoe)
     }
+
+    pub async fn get_standings(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(Vec<UTTTLeaderboardEntry>, bool)> {
+        let (leaderboard, more) = UTTTLeaderboardEntryRaw::get_all_sorted(tx).await?;
+
+        let mut entries = Vec::new();
+
+        for entry in leaderboard {
+            let user = User::get_by_id(entry.user_id, tx).await?.ok_or(anyhow::anyhow!("No user found"))?;
+
+            let ratio = entry.ratio.ok_or(anyhow::anyhow!("No ratio found"))?;
+            let wins = entry.total.unwrap_or(0);
+
+            // ratio is wins - losses
+            let losses = wins - ratio;
+
+            // now that we've reconstructed the wins and losses, we can calculate the players rating.
+            let rating = super::calculate_rating(wins, losses);
+
+            entries.push(UTTTLeaderboardEntry { user, wins, losses, rating });
+        }
+
+        // sort entried by rating, highest to lowest
+        entries.sort_by(|a, b| b.rating.partial_cmp(&a.rating).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok((entries, more))
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct UTTTLeaderboardEntryRaw {
+    user_id: i64,
+    ratio: Option<i64>,
+    total: Option<i64>,
+}
+
+impl UTTTLeaderboardEntryRaw {
+    async fn get_all_sorted(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(Vec<Self>, bool)> {
+        let leaderboard = sqlx::query_as!(
+            Self,
+            r#"
+            SELECT user_id, SUM((won::integer * 2) - 1) as ratio, SUM(won::integer) as total FROM ultimate_tictactoe GROUP BY user_id ORDER BY ratio DESC
+            "#,
+        )
+        .fetch_all(tx.acquire().await?)
+        .await?;
+
+        Ok((leaderboard, false))
+    }
+}
+
+pub struct UTTTLeaderboardEntry {
+    pub user: User,
+    pub wins: i64,
+    pub losses: i64,
+    pub rating: f64,
 }

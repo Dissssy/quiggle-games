@@ -49,6 +49,18 @@ impl User {
             Ok(None)
         }
     }
+    pub async fn get_by_id(id: i64, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<Option<Self>> {
+        let row = sqlx::query_as!(Self, "SELECT * FROM users WHERE id = $1", id as i32).fetch_optional(tx.acquire().await?).await?;
+        if let Some(row) = row {
+            Ok(Some(Self {
+                id: row.id,
+                name: row.name,
+                discord_id: row.discord_id,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
     pub async fn create(ctx: &serenity::client::Context, discord_id: &serenity::model::id::UserId, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<Self> {
         let user = discord_id.to_user(&ctx.http).await?;
 
@@ -62,6 +74,7 @@ impl User {
         )
         .fetch_one(tx.acquire().await?)
         .await?;
+
         Ok(Self {
             id: row.id,
             name: row.name,

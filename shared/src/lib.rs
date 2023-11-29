@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serenity::all::*;
 
 pub use anyhow;
+pub use async_recursion::async_recursion;
 pub use async_trait::async_trait;
 pub use colored;
 pub use log;
@@ -33,7 +34,7 @@ where
         let info = self.get_command_info();
         let mut b = CreateCommand::new(info.name);
         b = b.description(info.description);
-        for option in info.options {
+        for option in info.options.0 {
             b = b.add_option(CreateCommandOption::new(option.option_type.into(), option.name, option.description).required(option.required));
         }
         b
@@ -119,8 +120,19 @@ impl From<serenity::model::application::Command> for CommandInfo {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct UnorderedVec<T>(Vec<T>);
+impl CommandInfo {
+    pub fn populate_subcommands(&mut self, command: serenity::all::Command) {
+        for option in &mut self.options.0 {
+            // find commandoption with matching name
+            let command_option = command.options.iter().find(|o| o.name == option.name).unwrap();
+
+            option.populate_subcommands(command_option);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct UnorderedVec<T>(pub Vec<T>);
 
 impl<T> From<Vec<T>> for UnorderedVec<T> {
     fn from(vec: Vec<T>) -> Self {
@@ -128,20 +140,46 @@ impl<T> From<Vec<T>> for UnorderedVec<T> {
     }
 }
 
-impl<T> IntoIterator for UnorderedVec<T> {
-    type Item = T;
-    type IntoIter = std::vec::IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+impl<T> UnorderedVec<T> {
+    pub fn push<N>(&mut self, val: N)
+    where
+        N: Into<T>,
+    {
+        self.0.push(val.into());
     }
 }
+
+impl<T> PartialEq for UnorderedVec<T>
+where
+    T: PartialEq + std::fmt::Debug,
+{
+    fn eq(&self, other: &Self) -> bool {
+        let b = self.0.len() == other.0.len() && self.0.iter().all(|v| other.0.contains(v));
+        if !b {
+            println!("self: {:#?}", self.0);
+            println!("other: {:#?}", other.0);
+        }
+        b
+    }
+}
+
+impl<T> Eq for UnorderedVec<T> where T: Eq + std::fmt::Debug {}
+
+// impl<T> IntoIterator for UnorderedVec<T> {
+//     type Item = T;
+//     type IntoIter = std::vec::IntoIter<T>;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.0.into_iter()
+//     }
+// }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CommandOption {
     pub name: String,
     pub description: String,
     pub option_type: CommandOptionType,
+    pub choices: UnorderedVec<CommandOptionChoice>,
     pub required: bool,
 }
 
@@ -151,7 +189,34 @@ impl From<serenity::model::application::CommandOption> for CommandOption {
             name: option.name,
             description: option.description,
             option_type: option.kind.into(),
+            choices: option.choices.into_iter().map(|choice| choice.into()).collect::<Vec<CommandOptionChoice>>().into(),
             required: option.required,
+        }
+    }
+}
+
+impl CommandOption {
+    pub fn populate_subcommands(&mut self, command_option: &serenity::model::application::CommandOption) {
+        match &mut self.option_type {
+            CommandOptionType::SubCommand(subcommands) => {
+                for subcommand in &command_option.options {
+                    let mut t: CommandOption = subcommand.clone().into();
+                    t.populate_subcommands(subcommand);
+                    subcommands.push(t);
+                }
+
+                // for subcommand in subcommands.0.iter_mut() {
+                //     subcommand.populate_subcommands(command_option);
+                // }
+            }
+            CommandOptionType::SubCommandGroup(subcommands) => {
+                for subcommand in &command_option.options {
+                    let mut t: CommandOption = subcommand.clone().into();
+                    t.populate_subcommands(subcommand);
+                    subcommands.push(t);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -166,8 +231,8 @@ pub enum CommandOptionType {
     Number,
     Role,
     String,
-    SubCommand,
-    SubCommandGroup,
+    SubCommand(UnorderedVec<CommandOption>),
+    SubCommandGroup(UnorderedVec<CommandOption>),
     Unknown(Option<u8>),
     User,
 }
@@ -183,8 +248,8 @@ impl From<serenity::model::application::CommandOptionType> for CommandOptionType
             serenity::model::application::CommandOptionType::Number => Self::Number,
             serenity::model::application::CommandOptionType::Role => Self::Role,
             serenity::model::application::CommandOptionType::String => Self::String,
-            serenity::model::application::CommandOptionType::SubCommand => Self::SubCommand,
-            serenity::model::application::CommandOptionType::SubCommandGroup => Self::SubCommandGroup,
+            serenity::model::application::CommandOptionType::SubCommand => Self::SubCommand(UnorderedVec::from(Vec::new())),
+            serenity::model::application::CommandOptionType::SubCommandGroup => Self::SubCommandGroup(UnorderedVec::from(Vec::new())),
             serenity::model::application::CommandOptionType::Unknown(i) => Self::Unknown(Some(i)),
             serenity::model::application::CommandOptionType::User => Self::User,
             _ => Self::Unknown(None),
@@ -203,8 +268,8 @@ impl From<CommandOptionType> for serenity::model::application::CommandOptionType
             CommandOptionType::Number => serenity::model::application::CommandOptionType::Number,
             CommandOptionType::Role => serenity::model::application::CommandOptionType::Role,
             CommandOptionType::String => serenity::model::application::CommandOptionType::String,
-            CommandOptionType::SubCommand => serenity::model::application::CommandOptionType::SubCommand,
-            CommandOptionType::SubCommandGroup => serenity::model::application::CommandOptionType::SubCommandGroup,
+            CommandOptionType::SubCommand(_) => serenity::model::application::CommandOptionType::SubCommand,
+            CommandOptionType::SubCommandGroup(_) => serenity::model::application::CommandOptionType::SubCommandGroup,
             CommandOptionType::Unknown(i) => serenity::model::application::CommandOptionType::Unknown(i.unwrap_or(0)),
             CommandOptionType::User => serenity::model::application::CommandOptionType::User,
         }
@@ -296,4 +361,25 @@ pub fn format_duration(t: u64) -> String {
         s.push_str("0s");
     }
     s.trim().to_string()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CommandOptionChoice {
+    pub name: String,
+    pub value: String,
+}
+
+impl From<serenity::model::application::CommandOptionChoice> for CommandOptionChoice {
+    fn from(choice: serenity::model::application::CommandOptionChoice) -> Self {
+        let value = choice.value.to_string();
+
+        // attempt to strip quotes
+        let value = if value.starts_with('"') && value.ends_with('"') {
+            value[1..value.len() - 1].to_string()
+        } else {
+            value
+        };
+
+        Self { name: choice.name, value }
+    }
 }

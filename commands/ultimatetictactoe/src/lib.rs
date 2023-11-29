@@ -26,6 +26,7 @@ impl qg_shared::Command for UltimateTicTacToe {
                 name: String::from("opponent"),
                 description: String::from("The opponent to play against"),
                 option_type: qg_shared::CommandOptionType::User,
+                choices: qg_shared::UnorderedVec::from(vec![]),
                 required: true,
             }]
             .into(),
@@ -217,35 +218,39 @@ impl Game {
                             }
                         };
                         if let Some(winner) = game.board.check_winner(&self.players) {
+                            self.gamestate = State::Finished(WonGame {
+                                winner: winner.clone(),
+                                board: game.board.clone(),
+                            });
+                            // render early so the messages and sql stuff doesnt lag the update
+                            self.render(ctx, interaction).await?;
                             for player in self.players.all() {
-                                ctx.http
-                                    .get_user(player.id)
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Error getting user: {}", e);
-                                        e
-                                    })?
-                                    .create_dm_channel(&ctx.http)
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Error creating dm channel: {}", e);
-                                        e
-                                    })?
-                                    .send_message(
-                                        &ctx.http,
-                                        CreateMessage::default().content({
-                                            if let Outcome::Win(p) = winner {
-                                                format!("You {} in {}", if *player == p { "won" } else { "got your ass handed to you" }, interaction.message.link())
-                                            } else {
-                                                format!("You tied in {}", interaction.message.link())
+                                match ctx.http.get_user(player.id).await {
+                                    Ok(user) => match user.create_dm_channel(&ctx.http).await {
+                                        Ok(dm) => {
+                                            if let Err(e) = dm
+                                                .send_message(&ctx.http, {
+                                                    CreateMessage::default().content({
+                                                        if let Outcome::Win(p) = winner {
+                                                            format!("You {} in {}", if *player == p { "won" } else { "got your ass handed to you" }, interaction.message.link())
+                                                        } else {
+                                                            format!("You tied in {}", interaction.message.link())
+                                                        }
+                                                    })
+                                                })
+                                                .await
+                                            {
+                                                qg_shared::log::trace!("Failed to send message to user: {}", e);
                                             }
-                                        }),
-                                    )
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Error sending message to user: {}", e);
-                                        e
-                                    })?;
+                                        }
+                                        Err(e) => {
+                                            qg_shared::log::trace!("Failed to create dm channel: {}", e);
+                                        }
+                                    },
+                                    Err(e) => {
+                                        qg_shared::log::trace!("Failed to get user: {}", e);
+                                    }
+                                }
                             }
 
                             if let Some(db) = db {
@@ -258,13 +263,15 @@ impl Game {
 
                                     for player in self.players.all() {
                                         let user = &players[&player.id];
-                                        let opponent = &players[&self.players.all().find(|p| p.id != player.id).ok_or(anyhow!("Opponent not found"))?.id];
-                                        qg_shared::db::UltimateTicTacToe::create(user.id as i32, opponent.id as i32, player.id == winner.id, db).await?;
+                                        let opponent = &players[&self.players.all().find(|p| p.id != player.id).unwrap_or(player).id];
+                                        if user.id != opponent.id {
+                                            qg_shared::db::UltimateTicTacToe::create(user.id as i32, opponent.id as i32, player.id == winner.id, db).await?;
+                                        }
                                     }
                                 }
                             }
 
-                            self.gamestate = State::Finished(WonGame { winner, board: game.board.clone() });
+                            return Ok(()); // we dont want to render again
                         } else if next_player {
                             self.players.next_player();
 
@@ -990,7 +997,7 @@ impl Board {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Outcome {
     Win(Player),
     Tie,

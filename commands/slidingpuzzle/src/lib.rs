@@ -278,11 +278,13 @@ impl Game {
                                 },
                                 board: game.board.clone(),
                             });
+                            // early render so the player isnt waiting on the sql query to finish
+                            self.render(ctx, interaction, self.start_time).await?;
                             if let Some(db) = db {
                                 // ensure the user is in the database first
                                 let user = qg_shared::db::User::get_or_create(ctx, &self.player.id, db).await?;
                                 // create an entry for the user in the slidingpuzzle table
-                                qg_shared::db::SlidingPuzzle::create(
+                                let s = qg_shared::db::SlidingPuzzle::create(
                                     user.id as i32,
                                     self.difficulty as i32,
                                     self.size as i32,
@@ -291,7 +293,10 @@ impl Game {
                                     db,
                                 )
                                 .await?;
+
+                                println!("Created SlidingPuzzle entry: {:?}", s);
                             }
+                            return Ok(()); // we dont want to render again
                         } else {
                             updatetime = true;
                         }
@@ -688,9 +693,9 @@ impl Board {
         };
         // we need to shuffle the board in a way where we know it's solvable. so depending on the selected difficulty, we'll swap pieces a certain number of times
         let number_of_moves = match difficulty {
-            Difficulty::Easy => 10 * multiplier,
-            Difficulty::Medium => 50 * multiplier,
-            Difficulty::Hard => 100 * multiplier,
+            Difficulty::Easy => 2 * multiplier,
+            Difficulty::Medium => 5 * multiplier,
+            Difficulty::Hard => 10 * multiplier,
         };
 
         for _ in 0..number_of_moves {

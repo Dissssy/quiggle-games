@@ -29,6 +29,8 @@ impl Handler {
         commands.register(http, Arc::new(Mutex::new(qg_tictactoe::command()))).await?;
         commands.register(http, Arc::new(Mutex::new(qg_ulttictactoe::command()))).await?;
         commands.register(http, Arc::new(Mutex::new(qg_slidingpuzzle::command()))).await?;
+        #[cfg(feature = "leaderboard")]
+        commands.register(http, Arc::new(Mutex::new(qg_leaderboard::command()))).await?;
         commands.finalize_registration(http).await?;
         Ok(())
     }
@@ -63,34 +65,48 @@ impl EventHandler for Handler {
                             }
                         }
                         #[cfg(not(feature = "leaderboard"))]
-                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                        None::<sqlx::Transaction<'_, sqlx::Postgres>>
                     };
                     if let Err(e) = command.lock().await.application_command(&ctx, &mut cmd, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = cmd
+                        if cmd
                             .create_response(&ctx.http, {
                                 CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(e.to_string()).ephemeral(true))
                                 // f.interaction_response_data(|d| d.content(e).ephemeral(true))
                             })
                             .await
+                            .is_err()
                         {
-                            log::error!("Error creating interaction response: {}", e);
+                            // attempt to create followup message
+                            log::trace!("Error creating interaction response: {}", e);
+                            if let Err(e) = cmd.create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(e.to_string()).ephemeral(true)).await {
+                                log::error!("Error creating followup message: {}", e);
+                            }
                         }
                         // abort the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
                             if let Err(e) = tx.rollback().await {
                                 log::error!("Error rolling back transaction: {}", e);
+                            } else {
+                                log::trace!("Rolled back transaction");
                             }
+                        } else {
+                            log::trace!("no transaction to rollback");
                         }
                     } else {
                         log::trace!("Handled interaction for command {}", name.blue());
                         // complete the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
+                            log::trace!("committing transaction");
                             if let Err(e) = tx.commit().await {
                                 log::error!("Error committing transaction: {}", e);
+                            } else {
+                                log::trace!("Commit transaction");
                             }
+                        } else {
+                            log::trace!("no transaction to commit");
                         }
                     }
                 } else {
@@ -128,25 +144,34 @@ impl EventHandler for Handler {
                             }
                         }
                         #[cfg(not(feature = "leaderboard"))]
-                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                        None::<sqlx::Transaction<'_, sqlx::Postgres>>
                     };
                     if let Err(e) = cmd.message_component(&ctx, &mut cmp, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = cmp
+                        if cmp
                             .create_response(&ctx.http, {
                                 CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(e.to_string()).ephemeral(true))
                                 // f.interaction_response_data(|d| d.content(e).ephemeral(true))
                             })
                             .await
+                            .is_err()
                         {
-                            log::error!("Error creating interaction response: {}", e);
+                            // attempt to create followup message
+                            log::trace!("Error creating interaction response: {}", e);
+                            if let Err(e) = cmp.create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(e.to_string()).ephemeral(true)).await {
+                                log::error!("Error creating followup message: {}", e);
+                            }
                         }
                         // abort the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
                             if let Err(e) = tx.rollback().await {
                                 log::error!("Error rolling back transaction: {}", e);
+                            } else {
+                                log::trace!("Rolled back transaction");
                             }
+                        } else {
+                            log::trace!("no transaction to rollback");
                         }
                     } else {
                         log::trace!("Handled interaction for command {}", name.blue());
@@ -156,9 +181,14 @@ impl EventHandler for Handler {
                         // complete the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
+                            log::trace!("committing transaction");
                             if let Err(e) = tx.commit().await {
                                 log::error!("Error committing transaction: {}", e);
+                            } else {
+                                log::trace!("Commit transaction");
                             }
+                        } else {
+                            log::trace!("no transaction to commit");
                         }
                     }
                 } else {
@@ -191,34 +221,48 @@ impl EventHandler for Handler {
                             }
                         }
                         #[cfg(not(feature = "leaderboard"))]
-                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                        None::<sqlx::Transaction<'_, sqlx::Postgres>>
                     };
                     if let Err(e) = command.lock().await.autocomplete(&ctx, &mut act, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = act
+                        if act
                             .create_response(&ctx.http, {
                                 CreateInteractionResponse::Autocomplete(CreateAutocompleteResponse::new().add_string_choice(e.to_string(), "epicfail"))
                                 // f.add_string_choice(e, "epicfail")
                             })
                             .await
+                            .is_err()
                         {
-                            log::error!("Error creating interaction response: {}", e);
+                            // attempt to create followup message
+                            log::trace!("Error creating interaction response: {}", e);
+                            if let Err(e) = act.create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(e.to_string()).ephemeral(true)).await {
+                                log::error!("Error creating followup message: {}", e);
+                            }
                         }
                         // abort the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
                             if let Err(e) = tx.rollback().await {
                                 log::error!("Error rolling back transaction: {}", e);
+                            } else {
+                                log::trace!("Rolled back transaction");
                             }
+                        } else {
+                            log::trace!("no transaction to rollback");
                         }
                     } else {
                         log::trace!("Handled interaction for command {}", name.blue());
                         // complete the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
+                            log::trace!("committing transaction");
                             if let Err(e) = tx.commit().await {
                                 log::error!("Error committing transaction: {}", e);
+                            } else {
+                                log::trace!("Commit transaction");
                             }
+                        } else {
+                            log::trace!("no transaction to commit");
                         }
                     }
                 } else {
@@ -251,24 +295,31 @@ impl EventHandler for Handler {
                             }
                         }
                         #[cfg(not(feature = "leaderboard"))]
-                        None::<Option<sqlx::Transaction<'_, sqlx::Postgres>>>
+                        None::<sqlx::Transaction<'_, sqlx::Postgres>>
                     };
                     if let Err(e) = command.lock().await.modal_submit(&ctx, &mut mdl, &mut tx).await {
                         log::trace!("Error handling interaction for command {}: {}", name.blue(), e.to_string().red());
-                        if let Err(e) = mdl
+                        if mdl
                             .create_response(
                                 &ctx.http,
                                 CreateInteractionResponse::Message(CreateInteractionResponseMessage::default().content(e.to_string()).ephemeral(true)),
                             )
                             .await
+                            .is_err()
                         {
-                            log::error!("Error creating interaction response: {}", e);
+                            // attempt to create followup message
+                            log::trace!("Error creating interaction response: {}", e);
+                            if let Err(e) = mdl.create_followup(&ctx.http, CreateInteractionResponseFollowup::new().content(e.to_string()).ephemeral(true)).await {
+                                log::error!("Error creating followup message: {}", e);
+                            }
                         }
                         // abort the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
                             if let Err(e) = tx.rollback().await {
                                 log::error!("Error rolling back transaction: {}", e);
+                            } else {
+                                log::trace!("Rolled back transaction");
                             }
                         }
                     } else {
@@ -276,8 +327,11 @@ impl EventHandler for Handler {
                         // complete the transaction if it exists
                         #[cfg(feature = "leaderboard")]
                         if let Some(tx) = tx {
+                            log::trace!("committing transaction");
                             if let Err(e) = tx.commit().await {
                                 log::error!("Error committing transaction: {}", e);
+                            } else {
+                                log::trace!("Commit transaction");
                             }
                         }
                     }
@@ -294,7 +348,9 @@ impl EventHandler for Handler {
                     }
                 }
             }
-            _ => {}
+            i => {
+                log::warn!("Unhandled interaction {:?}", i);
+            }
         }
     }
 }
@@ -372,12 +428,26 @@ impl CommandHolder {
                     .get_commands(http)
                     .await?
                     .into_iter()
-                    .map(|command| (command.id, command.into()))
+                    .map(|command| {
+                        let id = command.id;
+                        let mut r: qg_shared::CommandInfo = command.clone().into();
+                        r.populate_subcommands(command);
+                        (id, r)
+                    })
                     .collect()
             }
             None => {
                 log::info!("Caching global commands");
-                http.get_global_commands().await?.into_iter().map(|command| (command.id, command.into())).collect()
+                http.get_global_commands()
+                    .await?
+                    .into_iter()
+                    .map(|command| {
+                        let id = command.id;
+                        let mut r: qg_shared::CommandInfo = command.clone().into();
+                        r.populate_subcommands(command);
+                        (id, r)
+                    })
+                    .collect()
             }
         });
         Ok(())
