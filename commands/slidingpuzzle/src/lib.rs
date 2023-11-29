@@ -694,18 +694,31 @@ impl Board {
         // we need to shuffle the board in a way where we know it's solvable. so depending on the selected difficulty, we'll swap pieces a certain number of times
         let number_of_moves = match difficulty {
             Difficulty::Easy => 2 * multiplier,
-            Difficulty::Medium => 5 * multiplier,
-            Difficulty::Hard => 10 * multiplier,
+            Difficulty::Medium => 4 * multiplier,
+            Difficulty::Hard => 8 * multiplier,
         };
-
+        let mut lastmove = None;
         for _ in 0..number_of_moves {
-            let thismove = match rng.gen_range(0..4) {
-                0 => Direction::Up,
-                1 => Direction::Down,
-                2 => Direction::Left,
-                3 => Direction::Right,
-                _ => unreachable!(),
+            let thismove = loop {
+                let thismove = match rng.gen_range(0..4) {
+                    0 => Direction::Up,
+                    1 => Direction::Down,
+                    2 => Direction::Left,
+                    3 => Direction::Right,
+                    _ => unreachable!(),
+                };
+                match (thismove, lastmove) {
+                    (Direction::Up, Some(Direction::Down)) => continue,
+                    (Direction::Down, Some(Direction::Up)) => continue,
+                    (Direction::Left, Some(Direction::Right)) => continue,
+                    (Direction::Right, Some(Direction::Left)) => continue,
+                    _ => {
+                        lastmove = Some(thismove);
+                        break thismove;
+                    }
+                }
             };
+
             board.move_empty_tile_raw(thismove);
         }
 
